@@ -4,9 +4,7 @@
 
 Native VS Code sidebar for **xAI's Grok Build** CLI, driven by `grok agent stdio` over the [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
 
-xAI's docs list Zed, Neovim, Emacs, and marimo as ACP-compatible. This extension fills the VS Code gap.
-
-Not affiliated with xAI.
+This extension fills the VS Code gap. Not affiliated with xAI.
 
 ![Welcome screen and mode picker](docs/screenshots/start.png)
 
