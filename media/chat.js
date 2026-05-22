@@ -150,26 +150,7 @@
 
   // ---------- markdown ----------
 
-  const FILE_EXTS = new Set([
-    "ts","tsx","js","jsx","mjs","cjs","json","md","mdx","toml","yml","yaml",
-    "css","scss","sass","less","html","htm","xml","svg",
-    "py","rb","go","rs","java","kt","kts","swift","c","cc","cpp","cxx","h","hh","hpp",
-    "cs","php","lua","sh","bash","zsh","fish","ps1","bat","cmd",
-    "txt","lock","env","ini","cfg","conf","gitignore","dockerignore",
-    "vue","svelte","astro","sql","prisma","graphql","gql",
-  ]);
-
-  function looksLikeFileRef(s) {
-    if (!s || s.length > 200) return false;
-    // strip optional :line or #Lstart-Lend suffix grok may emit
-    const core = s.replace(/[:#].*$/, "");
-    // Reject if it contains shell-ish chars or whitespace
-    if (/[\s"'`<>|&;]/.test(core)) return false;
-    // Must contain a dot for the extension
-    const m = core.match(/\.([A-Za-z0-9]+)$/);
-    if (!m) return false;
-    return FILE_EXTS.has(m[1].toLowerCase());
-  }
+  const { looksLikeFileRef, formatRelativeTime } = globalThis.GrokWebviewHelpers;
 
   function renderMarkdown(raw) {
     const codeBlocks = [];
@@ -562,21 +543,6 @@
     addPopover.appendChild(item);
     positionPopover(addPopover, addBtn);
     addPopover.hidden = false;
-  }
-
-  function formatRelativeTime(ts) {
-    if (!ts) return "";
-    const diff = Date.now() - ts;
-    const sec = Math.round(diff / 1000);
-    if (sec < 60) return `${sec}s ago`;
-    const min = Math.round(sec / 60);
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.round(min / 60);
-    if (hr < 24) return `${hr}h ago`;
-    const day = Math.round(hr / 24);
-    if (day < 7) return `${day}d ago`;
-    const d = new Date(ts);
-    return d.toLocaleDateString();
   }
 
   function renderHistoryList() {

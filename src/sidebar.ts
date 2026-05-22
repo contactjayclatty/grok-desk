@@ -845,6 +845,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     <div id="slash-popover" class="slash-popover" hidden></div>
   </footer>
 
+  <script nonce="${nonce}" src="${mediaUri("webview-helpers.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("chat.js")}"></script>
 </body>
 </html>`;

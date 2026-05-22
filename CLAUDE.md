@@ -4,7 +4,7 @@ VS Code sidebar extension for **xAI's Grok Build CLI**, driven by `grok agent st
 
 ## Status
 
-v1.0.3 (published on the VS Code Marketplace). 76 unit tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL.
+v1.0.3 (published on the VS Code Marketplace). 94 unit tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL.
 
 ## Module map
 
@@ -21,16 +21,17 @@ v1.0.3 (published on the VS Code Marketplace). 76 unit tests passing. Smoke-test
 | `src/slash-filter.ts` | Slash-command autocomplete filter |
 | `src/sessions.ts` | Disk-driven session listing/delete + customName overrides (pure) |
 | `media/chat.{js,css}` | Webview UI |
+| `media/webview-helpers.js` | Pure webview helpers (file-ref detection, relative-time format); shared between webview and tests |
 | `scripts/install.{ps1,sh}` | Auto-detect VS Code CLI, build .vsix, install |
 | `scripts/uninstall.{ps1,sh}` | Uninstall `PawelHuryn.grok-vscode-phuryn` |
 
-Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`) were split out specifically so protocol behavior can be unit-tested without spawning processes.
+Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`, `webview-helpers`) were split out specifically so protocol behavior can be unit-tested without spawning processes.
 
 ## Build + test
 
 ```bash
 npm install
-npm test         # 76 tests, <1s, vitest
+npm test         # 94 tests, <2s, vitest
 npm run package  # → grok-vscode-phuryn-1.0.3.vsix
 ```
 
@@ -86,5 +87,5 @@ Per-release: bump version in `package.json`, `npm test`, `npm run publish`. The 
 - Commits explain the *why*, not the *what*
 - Don't introduce abstractions speculatively
 - Don't add comments that explain what well-named code already says
-- 76 tests is the floor — every PR should keep that green
+- 94 tests is the floor — every PR should keep that green
 - **Version bumps are user-initiated.** Iterate at the current version (rebuild the same vsix and reinstall locally) until the user says to bump and publish. Don't bump `package.json` on your own.
