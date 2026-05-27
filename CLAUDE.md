@@ -4,7 +4,7 @@ VS Code sidebar extension for **xAI's Grok Build CLI**, driven by `grok agent st
 
 ## Status
 
-v1.0.3 (published on the VS Code Marketplace). 115 unit tests + 5 grok-CLI integration tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL.
+v1.1.0 (local; 1.0.3 is the latest published on the VS Code Marketplace). 94 unit tests passing. Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL, and against the **native Windows build** `grok` 0.2.3 (`irm https://x.ai/cli/install.ps1 | iex`) — `cli-locator` resolves `grok.cmd`/`grok.exe` and `terminal-manager` uses `shell:true`. The native-Windows smoke test surfaced a handful of webview regressions (history popover that never closed, session rows only clickable on the label, reasoning traces no longer expandable, a cluttered welcome screen), all fixed in this build.
 
 ## Module map
 
@@ -19,31 +19,27 @@ v1.0.3 (published on the VS Code Marketplace). 115 unit tests + 5 grok-CLI integ
 | `src/chips.ts` | File-chip CRUD (pure) |
 | `src/prompt-builder.ts` | Chip → prompt-string with `@path` refs and fenced code blocks |
 | `src/slash-filter.ts` | Slash-command autocomplete filter |
-| `src/sessions.ts` | Disk-driven session listing/delete + customName overrides + auto-title (pure) |
-| `src/file-ref.ts` | Parse `path#L10-L20` style file references (pure) |
+| `src/sessions.ts` | Disk-driven session listing/delete + customName overrides (pure) |
 | `media/chat.{js,css}` | Webview UI |
 | `media/webview-helpers.js` | Pure webview helpers (file-ref detection, relative-time format); shared between webview and tests |
 | `scripts/install.{ps1,sh}` | Auto-detect VS Code CLI, build .vsix, install |
 | `scripts/uninstall.{ps1,sh}` | Uninstall `PawelHuryn.grok-vscode-phuryn` |
 
-Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`, `file-ref`, `webview-helpers`) were split out specifically so protocol behavior can be unit-tested without spawning processes.
+Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-locator`, `sessions`, `webview-helpers`) were split out specifically so protocol behavior can be unit-tested without spawning processes.
 
 ## Build + test
 
 ```bash
 npm install
-npm test                # 115 unit tests, <2s, vitest (CI-safe)
-npm run test:integration # 5 grok-CLI tests; requires a real `grok` binary locally
-npm run package         # → grok-vscode-phuryn-1.0.4.vsix
+npm test         # 94 tests, <2s, vitest
+npm run package  # → grok-vscode-phuryn-1.1.0.vsix
 ```
-
-Integration tests in `test/integration/` spawn `grok agent stdio` and are excluded from the default `npm test` (which is what CI runs). They skip gracefully when `grok` is not on PATH.
 
 ## Install
 
 - **macOS / Linux / WSL Ubuntu:** `./scripts/install.sh`
-- **Windows (UI only, no working chat — grok CLI is Linux/macOS):** `pwsh scripts\install.ps1`
-- **Windows for real:** WSL2 Ubuntu + Remote-WSL → install in the WSL-side VS Code server
+- **Windows (native):** `pwsh scripts\install.ps1` — runs the native Windows `grok` CLI directly
+- **WSL Ubuntu (alternative):** Remote-WSL → install in the WSL-side VS Code server
 
 See `README.md § Install` for the full per-platform matrix.
 
@@ -54,7 +50,7 @@ See `README.md § Install` for the full per-platform matrix.
 - Sessions: list/resume via `session/load` (grok stores them at `~/.grok/sessions/<urlencoded-cwd>/<id>/`); rename/delete metadata in `context.globalState["grok.sessionMeta"]`. We never edit grok's own session files.
 - Handlers (mandatory or the agent crashes): `fs/read_text_file`, `fs/write_text_file`, `terminal/{create,output,wait_for_exit,kill,release}`
 - `session/request_permission` → chat card with `allow-always` / `allow-once` / `reject-once`, diff editor preview for `kind:"edit"`
-- `session/set_mode` wired but Plan is UI-disabled (the CLI's `x.ai/exit_plan_mode` treats any client response as approval — see Known limits). The mode picker exposes Agent and YOLO only.
+- `session/set_mode` wired but Plan is UI-disabled (the CLI's `x.ai/exit_plan_mode` treats any client response — result *or* error — as approval; re-verified broken in 0.2.3 — see Known limits). The mode picker exposes Agent and YOLO only.
 - `--reasoning-effort` flag at agent spawn (`low | medium | high | xhigh | max`)
 - `available_commands_update` → slash autocomplete
 - `current_mode_update` → bottom-toolbar mode button (the top bar was removed in 0.9.0)
@@ -71,7 +67,7 @@ See `README.md § Install` for the full per-platform matrix.
 
 - `terminal-manager.ts` uses `spawn(cmd, { shell: true })` so Node picks `cmd.exe` on Windows, `/bin/sh` elsewhere. Don't hardcode shell paths.
 - `cli-locator.ts` reads `HOME` / `USERPROFILE` env vars first (testability), falls back to `os.homedir()`. Uses `where` on Windows, `command -v` elsewhere. Checks `.cmd`/`.exe`/`.bat` extensions on Windows.
-- Tests use `node -e "..."` everywhere so commands are deterministic across platforms — don't add `pwd`, `awk`, `sleep`, `true`, etc.
+- Tests use `node -e "..."` everywhere, so commands are deterministic across platforms — don't add `pwd`, `awk`, `sleep`, `true`, etc.
 
 ## What's next (priority order)
 
@@ -91,5 +87,5 @@ Per-release: bump version in `package.json`, `npm test`, `npm run publish`. The 
 - Commits explain the *why*, not the *what*
 - Don't introduce abstractions speculatively
 - Don't add comments that explain what well-named code already says
-- 115 unit tests is the floor — every PR should keep that green
+- 94 tests is the floor — every PR should keep that green
 - **Version bumps are user-initiated.** Iterate at the current version (rebuild the same vsix and reinstall locally) until the user says to bump and publish. Don't bump `package.json` on your own.

@@ -1,46 +1,34 @@
 # Changelog
 
-## 1.0.5 — 2026-05-23
+## 1.1.0 — 2026-05-27
 
-### Onboarding UX
+### Windows support
 
-- **Re-check connection actually resets state.** Clicking the button on the missing-CLI or auth-required panel now wipes any prior error (e.g. *"Grok exited (code 143)…"*) and clears the onboarding panel on success. Previously the panel and stale errors stuck around until you clicked *New Session*.
-- **Wider onboarding panel.** `max-width` bumped 320 → 384px so the `curl -fsSL https://x.ai/cli/install.sh | bash` line fits without breaking across two rows in normal sidebar widths.
+- **Native Windows is now first-class.** xAI shipped a native Windows build of the `grok` CLI (`irm https://x.ai/cli/install.ps1 | iex`), so the extension no longer needs WSL. This reverses the 1.0.3 "Windows isn't supported" onboarding panel.
+  - **Onboarding** now detects Windows and shows the PowerShell install command (`irm https://x.ai/cli/install.ps1 | iex`) with copy-to-clipboard and "Open terminal & run" — the same flow macOS/Linux already had, just with the right command per platform.
+  - **"Open terminal & run"** sends the PowerShell installer on Windows and the `curl | bash` installer elsewhere. The CLI locator (`grok.cmd`/`grok.exe`) and headless terminal manager (`shell:true`) already worked cross-platform.
+- **README + CLAUDE.md** updated: platforms now read "macOS, Linux, and Windows"; install steps show both the bash and PowerShell one-liners; build-from-source and uninstall lines note the `scripts\*.ps1` equivalents.
 
-### Buttons
+### Webview UI
 
-- **Auth button now runs the right command.** The *"Open terminal & run"* button on the auth-required screen, and the terminal command it executes, are now `grok login` — not `grok /login`. The slash prefix was a leftover from in-CLI slash commands and produced *"unknown command"* in the terminal.
+Surfaced by the first native-Windows smoke test (against `grok` 0.2.3):
 
-### Clickable areas
+- **Session-history popover now hides.** `.history-popover` set `display:flex`, which beat the UA `[hidden]{display:none}` rule (author styles win), so the dropdown rendered as an empty box on startup and `hidden = true` could never dismiss it. A `.toolbar-popover[hidden] { display:none }` rule restores correct hide behavior — the popover now closes on select, click-outside, and new-session.
+- **Whole history row is clickable.** Resume was wired only to the name label even though the row showed a pointer cursor; the handler moved to the row, so clicking anywhere on it (name, meta line, or padding) resumes. Rename/delete buttons keep their own `stopPropagation`.
+- **Reasoning traces are expandable again.** The "Thinking…/Thought for *N*s" line is once more a collapsible header — click it to reveal the full trace (collapsed by default, rAF-coalesced while streaming). This reverses the 1.0.2 change that discarded the trace at the render layer.
+- **Decluttered welcome screen.** Removed the static tips list (Enter to send / slash commands / file chips) from the empty-session screen.
+- **Restored user prompts when loading a session.** `session/load` replays history as session updates, but `user_message_chunk` had no route, so replayed user prompts fell through to the ignored generic-update branch and vanished — loaded sessions showed only the agent's half of the conversation. The chunk is now routed and rendered into a user bubble, with the in-flight agent turn committed at each user boundary. Replayed reasoning headers read "Thought" (no elapsed time, since the original timing isn't in the replay stream); live turns keep "Thought for *N*s".
+- **Inline diffs render as diffs.** Fenced ` ```diff ` blocks now color added lines green and removed lines red using VS Code's own `diffEditor` *line* backgrounds (so they match the editor's diff view), dim hunk/metadata lines, and wrap long lines instead of forcing horizontal scroll. Copy still yields plain diff text (the handler reads `innerText`, since each row is now a block-level span).
+- **Copy-code button no longer fights the text.** It fades to 0.95 opacity on code-block hover and full opacity on button hover, so its background stays solid instead of blending into the first line of code.
 
-- **Session history rows are fully clickable.** Clicking anywhere on a row in the history popover resumes the session — previously only the name text was the click target, so the surrounding row whitespace did nothing. Rename and delete icon buttons in the same row also got proper 24×24 hit targets instead of the prior tight 2×4 padding.
+### Mode picker
 
----
+- **Agent-mode description corrected.** As of `grok` 0.2.3, Agent mode acts directly and only prompts for changes it judges sensitive; the picker no longer claims it "asks for approval before making each change." Matched in the README modes table.
+- **Plan-mode note de-emphasized.** The "Reject / Abandon not yet supported" note under disabled Plan mode is now muted gray (`descriptionForeground`) instead of warning yellow — it's an explanation, not an alert.
 
-## 1.0.4 — 2026-05-22
+### Verified (no change)
 
-### Sessions
-
-- **Multi-session history.** Clock icon in the top bar lists every session grok stored under `~/.grok/sessions/<urlencoded-cwd>/`. Click a row to resume (via `session/load`); hover for rename/delete. Renames live in VS Code's `globalState` under `grok.sessionMeta` — we never edit grok's own session files.
-- **Auto-titles from the first user message.** New sessions get a 50-char preview of the first prompt as their display name. Existing custom names always win.
-
-### Composer
-
-- **File picker.** `+` button in the bottom toolbar → *Upload from computer* opens VS Code's native multi-select file dialog. Picked files are added as `@path` chips, same as drag-from-Explorer — no contents embedded.
-
-### Chat
-
-- **Clickable file references.** Inline code spans that look like a path with a known extension (e.g. `` `src/sidebar.ts:42` ``, `` `media/chat.js#L10-L20` ``) now render as links. Clicking opens the file in VS Code and reveals the referenced line range.
-
-### Metadata
-
-- **Extension description and README lead rewritten** to put the UX first: "Grok Build Visual Studio Code extension. A user-friendly embedded chat UI — not a terminal launcher." The ACP-wrapper framing moved into the second paragraph. Same content, different emphasis — how it feels to use, before how it's built. "Why an extension, not the CLI?" now leads with the toolbar dropdowns, file-ref links, and message-copy UX before the more technical bullets.
-
-### Tests
-
-- **115 unit tests + 5 grok-CLI integration tests.** Two pure helpers — `parseFileRef` ([src/file-ref.ts](src/file-ref.ts)) and `pickSessionTitle` ([src/sessions.ts](src/sessions.ts)) — extracted from the sidebar and covered with focused tests. A new integration suite in `test/integration/` spawns a real `grok agent stdio`, exercises `session/new` → on-disk `summary.json` shape → `listSessions` → `session/load` → `deleteSessionDir`, and is excluded from CI (GitHub has no grok binary). Run locally with `npm run test:integration`.
-
----
+- **Plan mode stays disabled.** Re-tested the `x.ai/exit_plan_mode` rejection path live against `grok` 0.2.3 over ACP: rejecting a plan with a JSON-RPC error still let the agent exit plan mode and execute the whole plan (it created the target file anyway). The CLI bug from the 0.1.x baseline is unchanged, so the Plan UI remains off.
 
 ## 1.0.3 — 2026-05-19
 

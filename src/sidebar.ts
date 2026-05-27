@@ -19,10 +19,8 @@ import {
   defaultFs,
   deleteSessionDir,
   listSessions,
-  pickSessionTitle,
   resolveGrokHome,
 } from "./sessions";
-import { parseFileRef } from "./file-ref";
 
 type WebviewMsg =
   | { type: "ready" }
@@ -51,7 +49,7 @@ type WebviewMsg =
   | { type: "listSessions" }
   | { type: "resumeSession"; id: string }
   | { type: "renameSession"; id: string; name: string }
-  | { type: "deleteSession"; id: string }
+  | { type: "deleteSession"; id: string; name?: string }
   | { type: "pickFile" };
 
 const SESSION_META_KEY = "grok.sessionMeta";
@@ -260,13 +258,15 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       if (gen !== this.sessionGen) return;
       this.post({ type: "commandsUpdate", commands: cmds });
     });
-    client.on("userMessage", (text: string) => {
-      if (gen !== this.sessionGen) return;
-      this.post({ type: "userMessage", text, chips: [] });
-    });
     client.on("messageChunk", (text: string) => {
       if (gen !== this.sessionGen) return;
       this.post({ type: "messageChunk", text });
+    });
+    client.on("userMessageChunk", (text: string) => {
+      if (gen !== this.sessionGen) return;
+      // Only the CLI replays these (during session/load). Live prompts render
+      // their user bubble from send(); the agent never echoes them back.
+      this.post({ type: "userMessageChunk", text });
     });
     client.on("thoughtChunk", (text: string) => {
       if (gen !== this.sessionGen) return;
@@ -324,7 +324,14 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       if (gen !== this.sessionGen) { client.dispose(); return undefined; }
       const defaultModel = cfg.get<string>("defaultModel", "");
       if (resumeId) {
-        await client.loadSession(resumeId, defaultModel || undefined);
+        // Bracket the replay so the webview can render finalized "Thought"
+        // headers (no elapsed time — the original timing isn't in the stream).
+        this.post({ type: "historyReplay", active: true });
+        try {
+          await client.loadSession(resumeId, defaultModel || undefined);
+        } finally {
+          this.post({ type: "historyReplay", active: false });
+        }
         this.activeSessionId = resumeId;
         this.titleGenerated = true; // existing session, name already in storage
         this.hasHistory = true;
@@ -333,7 +340,6 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         this.activeSessionId = client.sessionId;
       }
       if (gen !== this.sessionGen) { client.dispose(); this.client = undefined; return undefined; }
-      this.post({ type: "onboarding", state: "ok" });
     } catch (err) {
       if (gen !== this.sessionGen) { client.dispose(); return undefined; }
       const msg = (err as any).message ?? String(err);
@@ -378,16 +384,18 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         this.postChips();
         break;
       case "openFile": {
-        const ref = parseFileRef(msg.path);
-        let p = ref.path;
+        const m = msg.path.match(/^([^#]+?)(?:#L(\d+)(?:-L?(\d+))?)?$/i);
+        let p = m ? m[1] : msg.path;
+        const startStr = m && m[2];
+        const endStr = m && m[3];
         if (!path.isAbsolute(p)) {
           const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
           if (root) p = path.join(root, p);
         }
         const uri = vscode.Uri.file(p);
-        if (ref.startLine != null) {
-          const startLine = ref.startLine - 1;
-          const endLine = (ref.endLine ?? ref.startLine) - 1;
+        if (startStr) {
+          const startLine = Math.max(0, Number(startStr) - 1);
+          const endLine = endStr ? Math.max(startLine, Number(endStr) - 1) : startLine;
           try {
             const doc = await vscode.workspace.openTextDocument(uri);
             await vscode.window.showTextDocument(doc, {
@@ -509,8 +517,13 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       case "runInstallCmd": {
         const term = vscode.window.createTerminal("Install Grok");
         term.show();
+        // Windows ships a native CLI installed via PowerShell; the default VS Code
+        // terminal there is PowerShell, so use its syntax. Everything else is POSIX.
+        const done = "Done. Click 'Re-check connection' in the Grok sidebar.";
         term.sendText(
-          'curl -fsSL https://x.ai/cli/install.sh | bash && echo "\\nDone. Click \'Re-check connection\' in the Grok sidebar."',
+          process.platform === "win32"
+            ? `irm https://x.ai/cli/install.ps1 | iex; Write-Host "\`n${done}"`
+            : `curl -fsSL https://x.ai/cli/install.sh | bash && echo "\\n${done}"`,
         );
         break;
       }
@@ -524,11 +537,10 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         }
         const term = vscode.window.createTerminal("Grok Login");
         term.show();
-        term.sendText(`"${cliPath}" login`);
+        term.sendText(`"${cliPath}" /login`);
         break;
       }
       case "recheckConnection":
-        this.post({ type: "clearMessages" });
         await this.startSession();
         break;
       case "listSessions":
@@ -541,7 +553,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         this.renameSession(msg.id, msg.name);
         break;
       case "deleteSession":
-        await this.deleteSession(msg.id);
+        await this.deleteSession(msg.id, msg.name);
         break;
       case "pickFile":
         await this.pickFileFromComputer();
@@ -585,7 +597,14 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     this.postSessionsList();
   }
 
-  private async deleteSession(id: string): Promise<void> {
+  private async deleteSession(id: string, name?: string): Promise<void> {
+    const label = name ? `session "${name}"` : "this session";
+    const choice = await vscode.window.showWarningMessage(
+      `Delete ${label}? This cannot be undone.`,
+      { modal: true },
+      "Delete",
+    );
+    if (choice !== "Delete") return;
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     try {
       deleteSessionDir({
@@ -695,8 +714,9 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     this.titleGenerated = true;
     const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
     if (overrides[sid]?.customName) return;
-    const title = pickSessionTitle(first);
-    if (!title) return;
+    const cleaned = first.replace(/\s+/g, " ").trim();
+    if (!cleaned) return;
+    const title = cleaned.length > 50 ? cleaned.slice(0, 47) + "…" : cleaned;
     const next: SessionMetaOverrides = {
       ...overrides,
       [sid]: { ...(overrides[sid] ?? {}), customName: title },
@@ -724,7 +744,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   }
 
   private static readonly SUPPRESS_TYPES = new Set([
-    "messageChunk", "thoughtChunk", "toolCall", "toolCallUpdate",
+    "messageChunk", "userMessageChunk", "thoughtChunk", "toolCall", "toolCallUpdate",
     "promptComplete", "xaiNotification", "userMessage", "agentStart", "agentEnd",
   ]);
 
@@ -815,11 +835,6 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       <h2>Grok Build</h2>
       <p class="welcome-byline muted">by Paweł Huryn (<a href="https://www.productcompass.pm" class="muted-link">productcompass.pm</a>)</p>
       <p id="welcome-version" class="muted">starting...</p>
-      <ul class="welcome-tips" id="welcome-tips">
-        <li>Type your prompt below. <kbd>Enter</kbd> to send.</li>
-        <li>Slash commands: <code>/compact</code>, <code>/new</code>, <code>/plan</code>, <code>/context</code>, <code>/yolo</code>.</li>
-        <li>Active files appear in the toolbar below — click to toggle in/out of context.</li>
-      </ul>
       <div id="welcome-onboarding"></div>
     </div>
   </main>
