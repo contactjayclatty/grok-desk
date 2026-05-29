@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as os from "node:os";
-import { TerminalManager } from "../src/terminal-manager";
+import { TerminalManager, resolveExitCode, buildKillPlan } from "../src/terminal-manager";
 
 // Use `node -e` everywhere so tests are deterministic on Windows, macOS, and Linux.
 // Quoting strategy: single-quote the outer node script, escape inner single quotes if any.
@@ -41,6 +41,25 @@ describe("TerminalManager", () => {
     const r = m.output(terminalId);
     expect(r.output.length).toBeLessThanOrEqual(100);
     expect(r.truncated).toBe(true);
+    m.release(terminalId);
+  });
+
+  // Regression: truncating at a byte boundary must not split a multi-byte UTF-8
+  // character into a replacement char (U+FFFD). '✓' is 3 bytes; a 100-byte limit
+  // lands mid-character. Pre-fix `Buffer.toString` on the partial slice produced
+  // a trailing '�'; a StringDecoder buffers the incomplete bytes instead.
+  it("does not emit U+FFFD when truncation splits a multi-byte character", async () => {
+    const m = new TerminalManager();
+    const { terminalId } = m.create({
+      // 60 copies of '✓' = 180 bytes; limit 100 cuts mid-character.
+      command: nodeEval("process.stdout.write('\\u2713'.repeat(60))"),
+      outputByteLimit: 100,
+    });
+    await m.waitForExit(terminalId);
+    const r = m.output(terminalId);
+    expect(r.truncated).toBe(true);
+    expect(r.output).not.toContain("�");
+    expect(/^✓+$/.test(r.output)).toBe(true);
     m.release(terminalId);
   });
 
@@ -106,5 +125,50 @@ describe("TerminalManager", () => {
     });
     m.disposeAll();
     expect(() => m.output(terminalId)).toThrow();
+  });
+
+  // Regression: a process killed by a signal must not be reported as a clean
+  // exit (code 0). The old `code ?? 0` masked signal kills as success, so the
+  // agent assumed a command it interrupted had actually succeeded.
+  it("reports a non-zero exit code when a running process is killed", async () => {
+    const m = new TerminalManager();
+    const { terminalId } = m.create({ command: nodeEval("setInterval(()=>{}, 1000)") });
+    await new Promise((r) => setTimeout(r, 150)); // let it start
+    m.kill(terminalId);
+    const { exitCode } = await m.waitForExit(terminalId);
+    expect(exitCode).not.toBe(0);
+    m.release(terminalId);
+  });
+});
+
+describe("resolveExitCode", () => {
+  it("passes through a real exit code, including 0", () => {
+    expect(resolveExitCode(0, null)).toBe(0);
+    expect(resolveExitCode(7, null)).toBe(7);
+  });
+
+  it("maps a signal kill to 128 + signum (SIGTERM -> 143), never 0", () => {
+    expect(resolveExitCode(null, "SIGTERM")).toBe(128 + os.constants.signals.SIGTERM);
+    expect(resolveExitCode(null, "SIGTERM")).toBe(143);
+    expect(resolveExitCode(null, "SIGKILL")).toBe(128 + os.constants.signals.SIGKILL);
+    expect(resolveExitCode(null, "SIGTERM")).not.toBe(0);
+  });
+});
+
+describe("buildKillPlan", () => {
+  it("uses taskkill with /T /F (tree + force) on Windows", () => {
+    const plan = buildKillPlan(1234, "win32");
+    expect(plan.kind).toBe("taskkill");
+    if (plan.kind === "taskkill") {
+      expect(plan.file).toBe("taskkill");
+      expect(plan.args).toContain("/T");
+      expect(plan.args).toContain("/F");
+      expect(plan.args).toContain("1234");
+    }
+  });
+
+  it("uses a SIGTERM signal on POSIX", () => {
+    const plan = buildKillPlan(1234, "linux");
+    expect(plan).toEqual({ kind: "signal", signal: "SIGTERM" });
   });
 });

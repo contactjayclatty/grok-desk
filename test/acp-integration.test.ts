@@ -189,4 +189,38 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect(blocked).toHaveLength(0);
     expect((client as any).__terminalCalls()).toBe(1); // handler was called → command allowed
   });
+
+  // Regression (HIGH): writing to the CLI's stdin after the pipe is gone must
+  // not crash the extension host. Pre-fix, respond*/cancel did a bare
+  // `this.proc?.stdin.write(...)` — a destroyed pipe throws ERR_STREAM_DESTROYED
+  // and (lacking a `stdin` 'error' listener) became an uncaught host exception.
+  it("respond*/cancel swallow stdin write failures instead of crashing", async () => {
+    // Simulate a destroyed pipe that throws on write, the way Node's stdin does
+    // after the child exits.
+    (client as any).proc.stdin = {
+      writable: true,
+      write() {
+        throw new Error("write EPIPE / ERR_STREAM_DESTROYED");
+      },
+      destroy() {},
+    };
+
+    expect(() => client.respondPermission(1, "opt-1")).not.toThrow();
+    expect(() => client.respondExitPlan(2, "rejected")).not.toThrow();
+    await expect(client.cancel()).resolves.toBeUndefined();
+  });
+
+  it("a write to a non-writable stdin is skipped, not attempted", () => {
+    let called = false;
+    (client as any).proc.stdin = {
+      writable: false,
+      write() {
+        called = true;
+        throw new Error("should never be called");
+      },
+      destroy() {},
+    };
+    expect(() => client.respondPermission(1, "opt-1")).not.toThrow();
+    expect(called).toBe(false);
+  });
 });

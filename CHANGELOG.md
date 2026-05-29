@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.1 — 2026-05-29
+
+Robustness fixes from a static audit (cross-checked with Codex). The high-impact ones are in the child-process supervision layer; a few low-impact correctness/perf cleanups ride along. Findings judged overstated or cosmetic (e.g. the non-`file://` URI drop) were left as-is.
+
+### Fixes
+
+- **Responding to the CLI after it exits no longer crashes the extension host.** `respondPermission` / `respondExitPlan` / `cancel` / the internal request + response writers all did a bare `this.proc?.stdin.write(...)`. The `exit` handler never cleared `this.proc`, so after the CLI died the optional-chaining check still passed and the write hit a destroyed pipe — throwing `ERR_STREAM_DESTROYED` synchronously, or emitting an async `'error'` with no listener, either of which became an uncaught exception in the host. Real trigger: clicking Approve/Reject/Cancel (or a late `terminal/output` ack) after the CLI has crashed. All writes now route through a single `writeLine()` helper that checks `stdin.writable` and try/catches; `start()` registers a `stdin` `'error'` listener; the `exit` handler drops `this.proc` so later writes are skipped; `dispose()`'s `kill()` is wrapped (it can throw `EPERM` on Windows if the process already exited). ([src/acp.ts](src/acp.ts))
+- **Killed terminal commands are no longer reported as a clean exit.** A process terminated by a signal reports `code === null`; the old `code ?? 0` masked that as exit code `0`, so the agent assumed an interrupted command had succeeded. Signal kills now map to the shell convention `128 + signum` (SIGTERM → 143) via a new pure `resolveExitCode()` helper. The same `exit` handler also no longer clobbers an exit code already set by the `spawn` `'error'` handler. ([src/terminal-manager.ts](src/terminal-manager.ts))
+- **Windows: killing a terminal now kills the whole process tree.** With `shell: true`, `spawn` wraps the command in `cmd.exe`; `proc.kill("SIGTERM")` only terminated that wrapper, orphaning long-running descendants (`npm`, `node`, …) that held file locks and blocked subsequent grok runs. `kill()` now uses `taskkill /pid <pid> /T /F` (via `execFile`, no shell) on Windows through a new pure `buildKillPlan()` helper; POSIX keeps the direct signal. ([src/terminal-manager.ts](src/terminal-manager.ts))
+- **Terminal output no longer corrupts multi-byte UTF-8 at a buffer boundary.** Output was decoded with `Buffer.toString()` per chunk, so a character split across the truncation point (or across two stream chunks) became a replacement char (`�`) — visible for any non-ASCII output (emoji, i18n text, localized Windows paths). Each terminal now decodes through a `StringDecoder` that buffers incomplete sequences across boundaries. ([src/terminal-manager.ts](src/terminal-manager.ts))
+- **Per-request ACP timers are cleared on response.** Each `request()` armed a `setTimeout` (30 min for prompts) that was never cleared on success — the resolved request left a live timer and its closure pending until it fired and no-op'd. Timers are now tracked on the pending entry and cleared on response and on process exit. ([src/acp.ts](src/acp.ts))
+- **`#` in file paths (C#/F# folders) now parses correctly.** The "open file" ref parser used `[^#]+`, so a path with a `#` followed by a real `#L<n>` line suffix failed the match and fell through to opening the literal (wrong) path. Parsing moved to a pure `parseFileRef()` that anchors the `#L…` fragment to the end of the string. ([src/file-ref.ts](src/file-ref.ts))
+- **Dropping a huge file with Shift no longer freezes the window.** Shift-drop read the entire file synchronously just to count lines; a multi-MB log stalled the host (and a 500 MB file could OOM it). Files over 10 MB now skip the line count and fall back to a no-selection chip. ([src/file-ref.ts](src/file-ref.ts), [src/sidebar.ts](src/sidebar.ts))
+
+### Testing — 200 tests
+
+- New regression tests cover each fix, written to fail before the fix landed (TDD). Process layer: `writeLine` swallows a throwing/destroyed stdin and skips a non-writable pipe ([test/acp-integration.test.ts](test/acp-integration.test.ts)); `resolveExitCode` maps signals to `128 + signum` and passes real codes (incl. 0) through; a killed process surfaces a non-zero exit; `buildKillPlan` issues `taskkill /T /F` on Windows and `SIGTERM` on POSIX; truncating mid-character emits no `�` ([test/terminal-manager.test.ts](test/terminal-manager.test.ts)); a resolved `request()` leaves no armed timer ([test/acp.test.ts](test/acp.test.ts)). Pure path helpers: `parseFileRef` / `shouldReadFileInline` ([test/file-ref.test.ts](test/file-ref.test.ts)). Still grok-free.
+
 ## 1.2.0 — 2026-05-28
 
 ### Plan mode is now enabled

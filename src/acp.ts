@@ -89,7 +89,7 @@ export interface TerminalHandler {
   release(terminalId: string): void;
 }
 
-type Pending = { resolve: (v: any) => void; reject: (e: any) => void };
+type Pending = { resolve: (v: any) => void; reject: (e: any) => void; timer?: ReturnType<typeof setTimeout> };
 
 export class AcpClient extends EventEmitter {
   private proc?: ChildProcessWithoutNullStreams;
@@ -142,6 +142,14 @@ export class AcpClient extends EventEmitter {
     this.rl = createInterface({ input: this.proc.stdout });
     this.rl.on("line", (line) => this.onLine(line));
 
+    // Without an `error` listener, an async write failure on the stdin pipe
+    // (EPIPE / ERR_STREAM_DESTROYED after the CLI exits) becomes an uncaught
+    // exception that crashes the extension host. Swallow it here; `writeLine`
+    // handles the synchronous path.
+    this.proc.stdin.on("error", (err) => {
+      this.opts.log(`[acp] stdin error: ${(err as Error).message}`);
+    });
+
     this.proc.stderr.on("data", (d) => {
       const text = d.toString();
       this.opts.log(`[stderr] ${text}`);
@@ -149,11 +157,15 @@ export class AcpClient extends EventEmitter {
     });
     this.proc.on("exit", (code) => {
       this.opts.log(`grok exited with code ${code}`);
-      this.emit("exit", code);
+      // Drop the process handle so later writes are skipped rather than hitting
+      // a destroyed pipe (`this.proc?` alone stays truthy after exit).
+      this.proc = undefined;
       for (const [id, p] of this.pending) {
         this.pending.delete(id);
+        if (p.timer) clearTimeout(p.timer);
         p.reject(new Error(`Grok process exited (code ${code})`));
       }
+      this.emit("exit", code);
     });
     this.proc.on("error", (err) => {
       this.opts.log(`spawn error: ${err.message}`);
@@ -250,40 +262,64 @@ export class AcpClient extends EventEmitter {
   }
 
   async cancel(): Promise<void> {
-    if (!this.sessionId || !this.proc) return;
+    if (!this.sessionId) return;
     // ACP defines session/cancel as a notification (no id) — sending it as a
     // request causes grok-cli to ignore it. Write directly to stdin without an
     // id and don't await a response.
-    const notif = { jsonrpc: "2.0", method: "session/cancel", params: { sessionId: this.sessionId } };
-    try { this.proc.stdin.write(JSON.stringify(notif) + "\n"); } catch { /* best-effort */ }
+    this.writeLine({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: this.sessionId } });
   }
 
   /** Respond to a pending permission request (from the agent) with the chosen option id. */
   respondPermission(requestId: number | string, optionId: string): void {
-    this.proc?.stdin.write(JSON.stringify(makePermissionResponse(requestId, optionId)) + "\n");
+    this.writeLine(makePermissionResponse(requestId, optionId));
   }
 
   /** Respond to a pending exit_plan_mode request with the user's verdict. */
   respondExitPlan(requestId: number | string, type: "approved" | "abandoned" | "rejected"): void {
-    this.proc?.stdin.write(JSON.stringify(makeExitPlanResponse(requestId, type)) + "\n");
+    this.writeLine(makeExitPlanResponse(requestId, type));
   }
 
   dispose(): void {
     this.rl?.close();
-    this.proc?.kill();
+    try { this.proc?.kill(); } catch { /* already gone */ }
   }
 
   // ---------- internals ----------
 
+  /**
+   * Single gated path for every stdin write. Returns false (and never throws)
+   * if the process is gone or the pipe isn't writable — the optional-chaining
+   * `this.proc?` check alone is not enough, since a destroyed pipe is still
+   * non-null and `write()` on it throws/emits ERR_STREAM_DESTROYED.
+   */
+  private writeLine(obj: unknown): boolean {
+    const proc = this.proc;
+    if (!proc || proc.killed || !proc.stdin.writable) return false;
+    try {
+      proc.stdin.write(JSON.stringify(obj) + "\n");
+      return true;
+    } catch (err) {
+      this.opts.log(`[acp] stdin write failed: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
   private request(method: string, params: any): Promise<any> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.proc?.stdin.write(JSON.stringify(makeRequest(id, method, params)) + "\n");
+      const entry: Pending = { resolve, reject };
+      this.pending.set(id, entry);
+      if (!this.writeLine(makeRequest(id, method, params))) {
+        this.pending.delete(id);
+        reject(new Error(`Grok process is not running (${method})`));
+        return;
+      }
       const timeoutMs = method === "session/prompt" ? 1_800_000 : 120_000;
-      setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id);
+      // Tracked on the pending entry so the response/exit paths can clear it —
+      // otherwise every resolved request leaves a live timer (and its closure)
+      // armed for up to 30 min.
+      entry.timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
           reject(new Error(`ACP request timed out: ${method}`));
         }
       }, timeoutMs);
@@ -291,13 +327,11 @@ export class AcpClient extends EventEmitter {
   }
 
   private respondOk(id: number | string, result: any = {}): void {
-    this.proc?.stdin.write(JSON.stringify(makeAckResponse(id, result)) + "\n");
+    this.writeLine(makeAckResponse(id, result));
   }
 
   private respondError(id: number | string, code: number, message: string): void {
-    this.proc?.stdin.write(
-      JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }) + "\n",
-    );
+    this.writeLine({ jsonrpc: "2.0", id, error: { code, message } });
   }
 
   private onLine(line: string): void {
@@ -311,6 +345,7 @@ export class AcpClient extends EventEmitter {
       const p = this.pending.get(ev.id as number);
       if (p) {
         this.pending.delete(ev.id as number);
+        if (p.timer) clearTimeout(p.timer);
         if (ev.error) p.reject(ev.error);
         else p.resolve(ev.result);
       }
