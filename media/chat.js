@@ -19,13 +19,16 @@
   const addPopover = $("add-popover");
   const historyPopover = $("history-popover");
 
-  const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+  // grok's accepted reasoning-effort values, lowest → highest (matches the CLI;
+  // `max` is not a real grok level and is intentionally excluded — see #3/#4).
+  const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
   const EFFORT_TOOLTIPS = {
+    none: "None — no extra reasoning",
+    minimal: "Minimal — least reasoning",
     low: "Low — fast, lightweight reasoning",
     medium: "Medium — balanced",
     high: "High — deeper reasoning",
-    xhigh: "XHigh — very deep reasoning",
-    max: "Max — maximum depth, slowest",
+    xhigh: "XHigh — deepest reasoning, slowest",
   };
 
   const state = {

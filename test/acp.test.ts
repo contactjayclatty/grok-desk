@@ -34,14 +34,17 @@ describe("AcpClient.request timer lifecycle", () => {
   });
 });
 
-// @shugav (#4): grok-build ACP sessions reject reasoningEffort, so startup must
-// not forward defaultEffort as --reasoning-effort (it crashed the CLI, exit 2).
+// #3/#4 (thanks @shugav for the crash report): the startup crash was the bogus
+// `max` value, not reasoningEffort itself — grok accepts none|minimal|low|medium|
+// high|xhigh, and the flag must precede the `stdio` subcommand.
 describe("buildGrokAgentArgs", () => {
-  it("starts ACP sessions with the stdio subcommand", () => {
+  it("starts ACP sessions with the stdio subcommand when no effort is set", () => {
     expect(buildGrokAgentArgs()).toEqual(["agent", "stdio"]);
   });
 
-  it("does not forward defaultEffort to grok-build ACP startup", () => {
-    expect(buildGrokAgentArgs("max")).toEqual(["agent", "stdio"]);
+  it("forwards a valid effort as --reasoning-effort before the stdio subcommand", () => {
+    expect(buildGrokAgentArgs("high")).toEqual(["agent", "--reasoning-effort", "high", "stdio"]);
+    expect(buildGrokAgentArgs("none")).toEqual(["agent", "--reasoning-effort", "none", "stdio"]);
+    expect(buildGrokAgentArgs("xhigh")).toEqual(["agent", "--reasoning-effort", "xhigh", "stdio"]);
   });
 });

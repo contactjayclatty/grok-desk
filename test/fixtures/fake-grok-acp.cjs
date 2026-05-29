@@ -18,8 +18,18 @@
 
 const readline = require("readline");
 
+// Accept the startup arg shapes the extension actually sends: `agent stdio`,
+// optionally with `--reasoning-effort <value>` (an agent-level flag, before the
+// stdio subcommand). Mirror grok's validation: only the real effort values are
+// allowed; anything else (incl. the bogus `max`) exits 2 like the CLI does.
+const VALID_EFFORT = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const argv = process.argv.slice(2);
-if (argv.join(" ") !== "agent stdio") {
+function argvOk(a) {
+  if (a.length === 2) return a[0] === "agent" && a[1] === "stdio";
+  if (a.length === 4) return a[0] === "agent" && a[1] === "--reasoning-effort" && VALID_EFFORT.has(a[2]) && a[3] === "stdio";
+  return false;
+}
+if (!argvOk(argv)) {
   process.stderr.write(`unexpected argv: ${JSON.stringify(argv)}\n`);
   process.exit(2);
 }

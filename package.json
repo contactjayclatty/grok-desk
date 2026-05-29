@@ -163,22 +163,24 @@
           "type": "string",
           "enum": [
             "",
+            "none",
+            "minimal",
             "low",
             "medium",
             "high",
-            "xhigh",
-            "max"
+            "xhigh"
           ],
           "enumDescriptions": [
             "CLI default (no flag passed to grok agent stdio)",
-            "Low — saved for future ACP support",
-            "Medium — saved for future ACP support",
-            "High — saved for future ACP support",
-            "XHigh — saved for future ACP support",
-            "Max — saved for future ACP support"
+            "None",
+            "Minimal",
+            "Low — faster, lighter reasoning",
+            "Medium",
+            "High",
+            "XHigh — deepest reasoning, slowest"
           ],
           "default": "",
-          "description": "Saved reasoning effort preference. Current grok-build ACP sessions start with the CLI default effort because reasoningEffort is rejected by the backend."
+          "description": "Reasoning effort passed as --reasoning-effort to grok agent stdio. Values match the grok CLI's accepted set (none, minimal, low, medium, high, xhigh). Changing this restarts the session."
         },
         "grok.useCtrlEnterToSend": {
           "type": "boolean",

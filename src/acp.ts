@@ -19,7 +19,7 @@ import {
   shouldBlockWrite,
 } from "./plan-gate";
 
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type EffortLevel = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface AcpClientOptions {
   cliPath: string;
@@ -91,12 +91,12 @@ export interface TerminalHandler {
 
 type Pending = { resolve: (v: any) => void; reject: (e: any) => void; timer?: ReturnType<typeof setTimeout> };
 
-export function buildGrokAgentArgs(_effort?: EffortLevel): string[] {
-  // Current grok-build ACP sessions reject reasoningEffort. Passing it after
-  // `agent` exits with code 2; passing it globally reaches the backend but is
-  // rejected by the model. Keep the user setting persisted, but start stdio
-  // sessions with the CLI default effort until the ACP path supports it.
-  return ["agent", "stdio"];
+export function buildGrokAgentArgs(effort?: EffortLevel): string[] {
+  // `--reasoning-effort` is an `agent`-level flag, so it must precede the `stdio`
+  // subcommand (after `stdio` the CLI errors "unexpected argument"). Only the
+  // values grok actually accepts are offered (none|minimal|low|medium|high|xhigh);
+  // the bogus `max` we used to expose made grok exit with code 2 (see #3/#4).
+  return effort ? ["agent", "--reasoning-effort", effort, "stdio"] : ["agent", "stdio"];
 }
 
 export class AcpClient extends EventEmitter {
@@ -131,9 +131,6 @@ export class AcpClient extends EventEmitter {
 
   async start(): Promise<void> {
     const args = buildGrokAgentArgs(this.opts.effort);
-    if (this.opts.effort) {
-      this.opts.log(`grok.defaultEffort=${this.opts.effort} is saved but not forwarded because grok-build ACP sessions currently reject reasoningEffort`);
-    }
 
     this.opts.log(`spawning ${this.opts.cliPath} ${args.join(" ")} (cwd=${this.opts.cwd})`);
     // Node 18+ refuses to spawn .cmd/.bat without `shell: true` on Windows

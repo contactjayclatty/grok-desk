@@ -117,17 +117,17 @@ happy-dom test (see [Webview DOM tests](#webview-dom-tests) below). Drives the s
 - `planNotice` / `planBlocked` (command + write variants) render a `.plan-notice` with the right text
 - Read-only plan-history card renders with the persisted verdict label
 
-### `test/acp.test.ts` — ACP client helpers (2 tests)
+### `test/acp.test.ts` — ACP client helpers (3 tests)
 
-- **Spawn argv** — `buildGrokAgentArgs` always returns `["agent", "stdio"]`.
-- **Effort compatibility** — setting `grok.defaultEffort` does not add `--reasoning-effort` to ACP startup, preventing the code-2 crash seen with current `grok-build` backends.
+- **Request timer lifecycle** — a resolved `request()` clears its timeout (no leaked timer).
+- **Spawn argv** — `buildGrokAgentArgs()` returns `["agent", "stdio"]` with no effort, and `["agent", "--reasoning-effort", <value>, "stdio"]` (flag before the subcommand) for a valid effort.
 
-### `test/acp-integration.test.ts` — ACP wire layer + plan-mode gate (7 tests)
+### `test/acp-integration.test.ts` — ACP wire layer + plan-mode gate (11 tests)
 
 Spawns the fake `grok agent stdio` from `test/fixtures/fake-grok-acp.cjs` (a ~150-line ACP server encoding only what the protocol requires, not grok version quirks), and drives `src/acp.ts` AcpClient against it over real JSON-RPC stdio. Cross-platform: `.cmd` wrapper on Windows, `.sh` wrapper elsewhere; subprocess startup adds ~50–100ms per test (same order as terminal-manager).
 
 - **Lifecycle** — spawn → initialize → session/new succeeds; a basic prompt round-trips with `_meta.totalTokens`.
-- **Startup effort compatibility** — with `effort:"max"` configured, the fake CLI still receives `agent stdio` and the client logs that effort was not forwarded.
+- **Startup effort forwarding** — with a valid `effort` configured, the fake CLI (which exits 2 on any unexpected argv) accepts `agent --reasoning-effort <value> stdio` and the session starts, proving the forwarded arg shape.
 - **Plan-snoop** — grok's plan.md write (outside the workspace) is allowed AND emits `planFileContent` with the snooped text; the host's `exitPlanRequest` event fires with that content; the file actually lands on disk.
 - **Workspace-write gate** — with `planActive=true`, `fs/write_text_file` for a path inside the workspace is refused with PLAN_BLOCKED, emits `mutationBlocked`, no file lands.
 - **Workspace-write gate (off)** — with `planActive=false`, the same write succeeds end-to-end.

@@ -8,7 +8,7 @@
 
 ### Reasoning effort
 
-- **`grok.defaultEffort` no longer crashes startup.** The setting is still saved, but it's no longer forwarded as `--reasoning-effort` to `grok agent stdio` — current `grok-build` ACP sessions reject `reasoningEffort`, so forwarding it made the CLI exit with code 2 (e.g. after choosing Max). A pure `buildGrokAgentArgs()` helper + a fake-CLI startup regression test guard it. (#3, #4, thanks @shugav)
+- **`grok.defaultEffort` no longer crashes startup — and effort forwarding still works.** The `Grok exited (code 2)` crash was a value mismatch, not a protocol limitation: the picker offered `max`, which the grok CLI doesn't have (it accepts `none, minimal, low, medium, high, xhigh`). Fixed by aligning the offered values to grok's real set — dropped the bogus `max`, added `none`/`minimal`. `--reasoning-effort` is still forwarded (before the `stdio` subcommand, where the agent-level flag belongs) and changing effort still restarts the session. A pure `buildGrokAgentArgs()` helper + a fake-CLI startup test pin the arg shape. (#3, #4, thanks @shugav for the report)
 
 ### Plan review
 

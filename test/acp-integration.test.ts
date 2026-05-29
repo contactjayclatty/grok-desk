@@ -140,7 +140,7 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
     expect(meta).toMatchObject({ totalTokens: 10 });
   });
 
-  it("startup: configured default effort is not forwarded to grok-build ACP stdio", async () => {
+  it("startup: a valid default effort is forwarded as --reasoning-effort before stdio", async () => {
     const logs: string[] = [];
     const effortClient = new AcpClient({
       cliPath: fixtureCli(),
@@ -150,7 +150,7 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
         FAKE_WORKSPACE_ROOT: workspace,
         FAKE_PLAN_PATH: path.join(planHome, ".grok", "sessions", "cwd-x", "sess-effort", "plan.md"),
       },
-      effort: "max",
+      effort: "high",
       log: (msg) => logs.push(msg),
     });
 
@@ -158,11 +158,12 @@ describe("ACP integration (real subprocess, fake CLI)", () => {
       await effortClient.start();
       await effortClient.newSession();
 
+      // The fixture exits 2 on any argv it doesn't recognize, so a successful
+      // session proves the forwarded shape (`agent --reasoning-effort high stdio`)
+      // is what the extension sent.
       expect(effortClient.sessionId).toBe("fake-session-1");
-      expect(logs.join("\n")).toContain("not forwarded");
-      expect(logs.join("\n")).toContain("spawning");
-      expect(logs.join("\n")).toContain("agent stdio");
-      expect(logs.join("\n")).not.toContain("--reasoning-effort");
+      expect(logs.join("\n")).toContain("--reasoning-effort high");
+      expect(logs.join("\n")).toContain("agent --reasoning-effort high stdio");
     } finally {
       effortClient.dispose();
     }
