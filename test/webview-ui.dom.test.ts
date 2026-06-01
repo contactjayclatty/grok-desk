@@ -143,6 +143,75 @@ describe("mode picker (the plan-gate entry path)", () => {
   });
 });
 
+describe("gear settings lock (model + effort disabled while busy / priming)", () => {
+  const models = [
+    { modelId: "grok-build", name: "Grok Build" },
+    { modelId: "grok-composer-2.5-fast", name: "Composer 2.5 Fast" },
+  ];
+  function bootWithModels(busy?: { value: boolean; locked?: boolean }) {
+    const h = bootWebview();
+    dispatch(h.window, { type: "session", sessionId: "s1", models, currentModelId: "grok-build" });
+    if (busy) dispatch(h.window, { type: "setBusy", ...busy });
+    h.posted.length = 0;
+    return h;
+  }
+  const modelBtn = (doc: Document) => doc.querySelector(".model-name-btn") as HTMLButtonElement;
+
+  it("shows the user-facing model name on the gear button, not the raw id", () => {
+    const { window, doc } = bootWithModels();
+    click(window, $(doc, "gear-btn"));
+    expect(modelBtn(doc).textContent).toContain("Grok Build");
+    expect(modelBtn(doc).textContent).not.toContain("grok-build");
+  });
+
+  it("when idle, the model button opens the picker and a pick posts setModel", () => {
+    const { window, posted, doc } = bootWithModels();
+    click(window, $(doc, "gear-btn"));
+    expect(modelBtn(doc).disabled).toBe(false);
+
+    click(window, modelBtn(doc)); // opens the picker sub-view
+    const composer = [...doc.querySelectorAll("#gear-popover .toolbar-popover-item")]
+      .find((el) => el.textContent!.includes("Composer 2.5 Fast")) as HTMLElement;
+    click(window, composer);
+
+    expect(posted).toContainEqual({ type: "setModel", modelId: "grok-composer-2.5-fast" });
+  });
+
+  it("while priming, the model button is disabled and clicking it neither opens the picker nor posts", () => {
+    const { window, posted, doc } = bootWithModels({ value: true, locked: true });
+    click(window, $(doc, "gear-btn"));
+
+    expect(modelBtn(doc).disabled).toBe(true);
+    expect(modelBtn(doc).className).toContain("disabled");
+
+    click(window, modelBtn(doc));
+    // still on the main gear view (the picker's "← Model" back row never rendered)
+    expect(doc.querySelector("#gear-popover .popover-back")).toBeNull();
+    expect(types(posted)).not.toContain("setModel");
+  });
+
+  it("while busy, clicking an effort dot does not post setEffort", () => {
+    const { window, posted, doc } = bootWithModels({ value: true });
+    click(window, $(doc, "gear-btn"));
+    const dot = doc.querySelector(".effort-dot") as HTMLElement;
+
+    expect(dot.className).toContain("disabled");
+    click(window, dot);
+    expect(types(posted)).not.toContain("setEffort");
+  });
+
+  it("re-renders an open gear to unlock the controls once busy clears", () => {
+    const { window, doc } = bootWithModels({ value: true, locked: true });
+    click(window, $(doc, "gear-btn"));
+    expect(modelBtn(doc).disabled).toBe(true);
+
+    dispatch(window, { type: "setBusy", value: false });
+
+    expect(($(doc, "gear-popover") as any).hidden).toBe(false); // popover stays open
+    expect(modelBtn(doc).disabled).toBe(false); // now unlocked
+  });
+});
+
 describe("reasoning trace (regression: thinking traces no longer expandable)", () => {
   it("renders a collapsed thinking block whose header toggles the body open/closed", () => {
     const { window, doc } = bootWebview();

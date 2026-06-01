@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest } from "./acp";
+import { isIncompatibleAgentError } from "./acp-dispatch";
 import { locateGrokCli } from "./cli-locator";
 import { TerminalManager } from "./terminal-manager";
 import {
@@ -84,6 +85,11 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   private cliPath?: string;
   private sessionGen = 0;
   private hasHistory = false;
+  // True for the whole session-start window (spawn → newSession/load → primer).
+  // Model/effort changes are settings that restart or race the session, so they
+  // are ignored while priming — the webview also disables the controls (busy),
+  // this is the host-side backstop for a click that slips through that window.
+  private priming = false;
   private suppressContent = false;
   // Plan-reject specific suppression: drop streaming output (the false-approval
   // ramble) but let lifecycle events through so the webview clears `busy` and
@@ -161,9 +167,43 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     const picked = await vscode.window.showQuickPick(items, {
       placeHolder: "Pick a Grok model",
     });
-    if (picked) {
-      await this.client.setModel(picked.modelId);
-      this.post({ type: "modelChanged", modelId: picked.modelId });
+    if (picked) await this.switchModel(picked.modelId);
+  }
+
+  /**
+   * Switch the active model. Models belong to "agent types" (e.g. grok-build vs
+   * cursor for the composer models); the CLI binds the agent at spawn and locks
+   * it after the first turn, so a live `set_model` only works within the same
+   * agent. When it's rejected for a cross-agent model we persist the choice and
+   * restart — `newSession` re-applies it before the primer runs, while the agent
+   * is still rebindable. Same-agent switches stay live (history intact).
+   */
+  async switchModel(modelId: string): Promise<void> {
+    const client = this.client;
+    // Ignore switches fired during the session-start window: the live set_model
+    // would race the hidden primer (sometimes landing before the agent locks,
+    // sometimes after — see research/model-switch-race-probe.cjs), making the
+    // outcome unpredictable. The webview disables the control while busy; this
+    // is the backstop for a click already in flight.
+    if (!client || this.priming || modelId === client.currentModelId) return;
+    const cfg = vscode.workspace.getConfiguration("grok");
+    try {
+      await client.setModel(modelId);
+      await cfg.update("defaultModel", modelId, vscode.ConfigurationTarget.Global);
+    } catch (e) {
+      if (!isIncompatibleAgentError(e)) {
+        vscode.window.showErrorMessage(`Failed to set model: ${(e as Error).message}`);
+        return;
+      }
+      if (!this.hasHistory) {
+        await cfg.update("defaultModel", modelId, vscode.ConfigurationTarget.Global);
+        await this.startSession();
+        return;
+      }
+      const mode = await this.pickRestartMode("Switching to this model requires a new session.");
+      if (!mode) return; // dismissed — keep the current model
+      await cfg.update("defaultModel", modelId, vscode.ConfigurationTarget.Global);
+      await this.restartSession(mode);
     }
   }
 
@@ -430,7 +470,10 @@ See design doc for the full state machine diagram.`;
       this.output.appendLine(`[primer] failed: ${(e as Error).message}`);
     } finally {
       this.suppressContent = false;
-      if (gen === this.sessionGen) this.post({ type: "setBusy", value: false });
+      if (gen === this.sessionGen) {
+        this.priming = false;
+        this.post({ type: "setBusy", value: false });
+      }
     }
   }
 
@@ -477,6 +520,57 @@ See design doc for the full state machine diagram.`;
     return this.startSession();
   }
 
+  /** Confirm a restart for a setting that only applies on a fresh session
+   *  (reasoning effort, cross-agent model). Returns the chosen restart mode, or
+   *  undefined if the user dismissed the dialog. */
+  private async pickRestartMode(message: string): Promise<"clear" | "summarize" | undefined> {
+    const choice = await vscode.window.showInformationMessage(
+      message,
+      "Summarize & Restart",
+      "Just Restart",
+    );
+    if (!choice) return undefined;
+    return choice === "Just Restart" ? "clear" : "summarize";
+  }
+
+  /** Restart the session. "clear" drops the visible history; "summarize" first
+   *  captures a one-paragraph summary of the conversation and re-injects it as
+   *  hidden context after the restart so the new session keeps the thread. */
+  private async restartSession(mode: "clear" | "summarize"): Promise<void> {
+    if (mode === "clear") {
+      this.post({ type: "clearMessages" });
+      await this.startSession();
+      return;
+    }
+    const currentClient = this.client;
+    this.post({ type: "summarizing" });
+    const chunks: string[] = [];
+    const captureChunk = (t: string) => chunks.push(t);
+    currentClient?.on("messageChunk", captureChunk);
+    this.suppressContent = true;
+    try {
+      await currentClient?.prompt(
+        "Summarize our conversation so far in a concise paragraph. Be brief.",
+      );
+    } catch { /* best effort */ } finally {
+      currentClient?.off("messageChunk", captureChunk);
+      this.suppressContent = false;
+    }
+    const summary = chunks.join("").trim();
+
+    await this.startSession(); // resets suppressContent to false
+
+    if (summary && this.client) {
+      this.post({ type: "sessionContext" });
+      this.suppressContent = true;
+      try {
+        await this.client.prompt(`[Context from previous session]\n${summary}`);
+      } catch { /* best effort */ } finally {
+        this.suppressContent = false;
+      }
+    }
+  }
+
   private async startSession(resumeId?: string): Promise<AcpClient | undefined> {
     const gen = ++this.sessionGen;
     this.client?.dispose();
@@ -494,6 +588,7 @@ See design doc for the full state machine diagram.`;
     this.activeSessionId = undefined;
     this.titleGenerated = false;
     this.firstUserMessageForTitle = undefined;
+    this.priming = true;
     this.post({ type: "modeChanged", modeId: "agent" });
     if (resumeId) this.post({ type: "clearMessages" });
 
@@ -508,6 +603,7 @@ See design doc for the full state machine diagram.`;
     this.cliPath = cliPath || undefined;
     if (!cliPath) {
       if (gen !== this.sessionGen) return undefined;
+      this.priming = false;
       this.post({ type: "setBusy", value: false });
       this.post({ type: "onboarding", state: "missing-cli", platform: process.platform });
       return undefined;
@@ -770,6 +866,7 @@ See design doc for the full state machine diagram.`;
       const msg = (err as any).message ?? String(err);
       client.dispose();
       this.client = undefined;
+      this.priming = false;
       this.post({ type: "setBusy", value: false });
       if (/auth|unauthor|forbidden|401|403|api[_\s-]?key|credential|sign.?in/i.test(msg)) {
         this.post({ type: "onboarding", state: "auth-required" });
@@ -849,12 +946,10 @@ See design doc for the full state machine diagram.`;
         this.handleExitPlan(msg.requestId, msg.verdict, msg.comment);
         break;
       case "setModel":
-        if (this.client) {
-          try { await this.client.setModel(msg.modelId); }
-          catch (e) { vscode.window.showErrorMessage(`Failed to set model: ${(e as Error).message}`); }
-        }
+        await this.switchModel(msg.modelId);
         break;
       case "setEffort": {
+        if (this.priming) break; // ignore changes fired mid-session-start (see switchModel)
         const newLevel = msg.level;
         const cfg2 = vscode.workspace.getConfiguration("grok");
 
@@ -864,49 +959,10 @@ See design doc for the full state machine diagram.`;
           break;
         }
 
-        const choice = await vscode.window.showInformationMessage(
-          "Changing reasoning effort requires restarting the session.",
-          "Summarize & Restart",
-          "Just Restart",
-        );
-        if (!choice) break; // dismissed
-
+        const mode = await this.pickRestartMode("Changing reasoning effort requires restarting the session.");
+        if (!mode) break; // dismissed
         await cfg2.update("defaultEffort", newLevel, vscode.ConfigurationTarget.Global);
-
-        if (choice === "Just Restart") {
-          this.post({ type: "clearMessages" });
-          await this.startSession();
-          break;
-        }
-
-        // "Summarize & Restart": silently capture summary, inject as context in new session
-        const currentClient = this.client;
-        this.post({ type: "summarizing" });
-        const chunks: string[] = [];
-        const captureChunk = (t: string) => chunks.push(t);
-        currentClient.on("messageChunk", captureChunk);
-        this.suppressContent = true;
-        try {
-          await currentClient.prompt(
-            "Summarize our conversation so far in a concise paragraph. Be brief.",
-          );
-        } catch { /* best effort */ } finally {
-          currentClient.off("messageChunk", captureChunk);
-          this.suppressContent = false;
-        }
-        const summary = chunks.join("").trim();
-
-        await this.startSession(); // resets suppressContent to false
-
-        if (summary && this.client) {
-          this.post({ type: "sessionContext" });
-          this.suppressContent = true;
-          try {
-            await this.client.prompt(`[Context from previous session]\n${summary}`);
-          } catch { /* best effort */ } finally {
-            this.suppressContent = false;
-          }
-        }
+        await this.restartSession(mode);
         break;
       }
       case "openGlobalConfig": {

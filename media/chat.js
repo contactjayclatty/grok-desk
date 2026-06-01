@@ -199,7 +199,7 @@
 
   // ---------- markdown ----------
 
-  const { looksLikeFileRef, formatRelativeTime } = globalThis.GrokWebviewHelpers;
+  const { looksLikeFileRef, formatRelativeTime, modelDisplayName } = globalThis.GrokWebviewHelpers;
 
   function renderDiffCode(code) {
     const lines = code.replace(/\n+$/, "").split("\n");
@@ -478,24 +478,34 @@
     const row = document.createElement("div");
     row.className = "model-effort-row";
 
+    // Model + effort both restart or race the session, so they're locked while
+    // a turn is in flight or the session is still priming (the hidden primer) —
+    // the same `busy` signal that disables send/submit.
+    const settingsLocked = state.busy;
+
     const nameBtn = document.createElement("button");
-    nameBtn.className = "toolbar-btn model-name-btn";
-    const modelName = state.currentModelId || "grok-build";
+    nameBtn.className = "toolbar-btn model-name-btn" + (settingsLocked ? " disabled" : "");
+    const modelName = modelDisplayName(state.currentModelId, state.availableModels) || "Grok Build";
     nameBtn.innerHTML = `<span class="btn-label">${escapeHtml(truncate(modelName, 16))}</span>`;
-    nameBtn.title = `${modelName} — click to change`;
-    nameBtn.onclick = (e) => { e.stopPropagation(); renderModelPicker(); };
+    nameBtn.disabled = settingsLocked;
+    nameBtn.title = settingsLocked
+      ? `${modelName} — available once the session is ready`
+      : `${modelName} — click to change`;
+    if (!settingsLocked) nameBtn.onclick = (e) => { e.stopPropagation(); renderModelPicker(); };
     row.appendChild(nameBtn);
 
     const dotsEl = document.createElement("span");
-    dotsEl.className = "effort-dots";
+    dotsEl.className = "effort-dots" + (settingsLocked ? " disabled" : "");
     const currentIdx = EFFORT_LEVELS.indexOf(state.effort);
     EFFORT_LEVELS.forEach((id, i) => {
       const dot = document.createElement("span");
-      dot.className = "effort-dot" + (i <= currentIdx ? " active" : "");
+      dot.className = "effort-dot" + (i <= currentIdx ? " active" : "") + (settingsLocked ? " disabled" : "");
       // Render the dot as a CSS-shaped span (see chat.css). Avoids the classic
       // ● vs ○ Unicode size mismatch where the empty glyph is visibly larger.
-      dot.title = EFFORT_TOOLTIPS[id] || capitalize(id);
-      dot.onclick = (e) => {
+      dot.title = settingsLocked
+        ? "Available once the session is ready"
+        : (EFFORT_TOOLTIPS[id] || capitalize(id));
+      if (!settingsLocked) dot.onclick = (e) => {
         e.stopPropagation();
         state.effort = state.effort === id ? "" : id;
         vscode.postMessage({ type: "setEffort", level: state.effort });
@@ -1817,6 +1827,8 @@
         state.busy = !!msg.value;
         state.busyLocked = !!msg.locked;
         updateSendButton();
+        // Refresh the gear popover's model/effort lock state if it's open.
+        if (!gearPopover.hidden) renderGearMain();
         break;
       case "summarizing": {
         clearWelcome();

@@ -4,7 +4,7 @@ VS Code sidebar extension for **xAI's Grok Build CLI**, driven by `grok agent st
 
 ## Status
 
-v1.2.3 (published on the VS Code Marketplace). 223 tests passing, all grok-free (CI never spawns the binary; grok-dependent probes live separately in `research/*.cjs`). Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL, and against the **native Windows build** `grok` 0.2.3 (`irm https://x.ai/cli/install.ps1 | iex`) — `cli-locator` resolves `grok.cmd`/`grok.exe` and `terminal-manager` uses `shell:true`. The native-Windows smoke test surfaced a handful of webview regressions (history popover that never closed, session rows only clickable on the label, reasoning traces no longer expandable, a cluttered welcome screen), all fixed in this build. Plan mode is now **enabled** and enforced client-side (see `research/plan-mode.md` § Resolution).
+v1.2.4 (1.2.3 is the current published Marketplace release). 234 tests passing, all grok-free (CI never spawns the binary; grok-dependent probes live separately in `research/*.cjs`). Smoke-tested end-to-end against `grok` v0.1.211 on Linux and Windows-via-WSL, and against the **native Windows build** `grok` 0.2.3 (`irm https://x.ai/cli/install.ps1 | iex`) — `cli-locator` resolves `grok.cmd`/`grok.exe` and `terminal-manager` uses `shell:true`. The native-Windows smoke test surfaced a handful of webview regressions (history popover that never closed, session rows only clickable on the label, reasoning traces no longer expandable, a cluttered welcome screen), all fixed in this build. Plan mode is now **enabled** and enforced client-side (see `research/plan-mode.md` § Resolution).
 
 ## Module map
 
@@ -35,8 +35,8 @@ Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-lo
 
 ```bash
 npm install
-npm test         # 223 tests, ~1.4s, vitest — all grok-free (incl. happy-dom DOM tests + fake-CLI ACP integration tests)
-npm run package  # → grok-vscode-phuryn-1.2.3.vsix
+npm test         # 234 tests, ~1.4s, vitest — all grok-free (incl. happy-dom DOM tests + fake-CLI ACP integration tests)
+npm run package  # → grok-vscode-phuryn-1.2.4.vsix
 ```
 
 ## Install
@@ -50,6 +50,7 @@ See `README.md § Install` for the full per-platform matrix.
 ## ACP surfaces implemented
 
 - `initialize` → `session/new` / `session/load` → `session/set_model` → `session/prompt` lifecycle
+- **Model switching is agent-aware.** Models belong to *agent types* — `grok-build`/`grok-build-plan` vs the `cursor` agent that owns the Composer models. The CLI binds the agent at spawn and locks it after the first turn (incl. our primer), so a live `session/set_model` only works within the same agent; a cross-agent switch errors `MODEL_SWITCH_INCOMPATIBLE_AGENT` ("Start a new session"). `switchModel` in `sidebar.ts` tries the live switch, and on that error (detected by the pure `isIncompatibleAgentError` in `acp-dispatch.ts`) persists the pick to `grok.defaultModel` and restarts — `newSession` re-applies the model *before* the primer runs, while the agent is still rebindable. No history → transparent restart; with history → the same Summarize/Just-Restart prompt as an effort change (shared `pickRestartMode`/`restartSession` helpers). The toolbar model label resolves IDs to user-facing names via the pure `modelDisplayName` helper.
 - Streaming `agent_message_chunk` + `agent_thought_chunk`
 - Sessions: list/resume via `session/load` (grok stores them at `~/.grok/sessions/<urlencoded-cwd>/<id>/`); rename/delete metadata in `context.globalState["grok.sessionMeta"]`. We never edit grok's own session files.
 - Handlers (mandatory or the agent crashes): `fs/read_text_file`, `fs/write_text_file`, `terminal/{create,output,wait_for_exit,kill,release}`
@@ -92,5 +93,5 @@ Per-release: bump version in `package.json`, `npm test`, `npm run publish`. The 
 - Commits explain the *why*, not the *what*
 - Don't introduce abstractions speculatively
 - Don't add comments that explain what well-named code already says
-- 223 tests is the floor — every PR should keep that green. All tests are grok-free (no binary spawn); grok-dependent probes live in `research/*.cjs` and are run manually, never by `npm test` or CI
+- 234 tests is the floor — every PR should keep that green. All tests are grok-free (no binary spawn); grok-dependent probes live in `research/*.cjs` and are run manually, never by `npm test` or CI
 - **Version bumps are user-initiated.** Iterate at the current version (rebuild the same vsix and reinstall locally) until the user says to bump and publish. Don't bump `package.json` on your own.

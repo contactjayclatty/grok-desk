@@ -32,7 +32,16 @@
     return new Date(ts).toLocaleDateString();
   }
 
-  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime };
+  // Resolve a model ID to its user-facing name (e.g. "grok-build" → "Grok Build")
+  // using the availableModels list from session/new. Falls back to the ID when
+  // the model isn't in the list or has no name, so the label is never blank.
+  function modelDisplayName(modelId, availableModels) {
+    if (!modelId) return "";
+    const m = (availableModels || []).find((x) => x && x.modelId === modelId);
+    return (m && m.name) || modelId;
+  }
+
+  const api = { FILE_EXTS, looksLikeFileRef, formatRelativeTime, modelDisplayName };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — plain JS module, no types
-import { looksLikeFileRef, formatRelativeTime, FILE_EXTS } from "../media/webview-helpers.js";
+import { looksLikeFileRef, formatRelativeTime, FILE_EXTS, modelDisplayName } from "../media/webview-helpers.js";
 
 describe("looksLikeFileRef", () => {
   it("accepts a bare filename with a known extension", () => {
@@ -112,5 +112,29 @@ describe("formatRelativeTime", () => {
   it("uses Date.now() when no second arg is provided", () => {
     const out = formatRelativeTime(Date.now() - 2_000);
     expect(out).toMatch(/s ago$/);
+  });
+});
+
+describe("modelDisplayName", () => {
+  const models = [
+    { modelId: "grok-build", name: "Grok Build" },
+    { modelId: "grok-composer-2.5-fast", name: "Composer 2.5 Fast" },
+  ];
+
+  it("resolves a model ID to its user-facing name", () => {
+    expect(modelDisplayName("grok-build", models)).toBe("Grok Build");
+    expect(modelDisplayName("grok-composer-2.5-fast", models)).toBe("Composer 2.5 Fast");
+  });
+
+  it("falls back to the ID when the model is unknown or unnamed", () => {
+    expect(modelDisplayName("grok-mystery", models)).toBe("grok-mystery");
+    expect(modelDisplayName("grok-build", [{ modelId: "grok-build" }])).toBe("grok-build");
+    expect(modelDisplayName("grok-build", [])).toBe("grok-build");
+    expect(modelDisplayName("grok-build", undefined)).toBe("grok-build");
+  });
+
+  it("returns '' for a falsy model ID", () => {
+    expect(modelDisplayName("", models)).toBe("");
+    expect(modelDisplayName(undefined, models)).toBe("");
   });
 });

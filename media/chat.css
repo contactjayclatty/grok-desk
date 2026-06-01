@@ -696,6 +696,16 @@ textarea#input:focus {
 .effort-dot:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .effort-dot.active { opacity: 1; }
 
+/* Model + effort are locked while the session is busy/priming (mirrors the
+   disabled send button). No pointer, no hover affordance. */
+.model-name-btn.disabled,
+.effort-dot.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.effort-dot.disabled:hover { background: transparent; }
+
 /* ---- mode / section popover extras ---- */
 
 .mode-popover-item { min-width: 240px; }

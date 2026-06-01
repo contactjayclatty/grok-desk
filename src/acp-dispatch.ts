@@ -116,3 +116,17 @@ export function makeAckResponse(id: number | string, result: any = {}) {
 export function makeRequest(id: number, method: string, params: any) {
   return { jsonrpc: "2.0", id, method, params };
 }
+
+/**
+ * True when `session/set_model` was rejected because the target model belongs
+ * to a different agent than the one this session is bound to. The CLI binds the
+ * agent at spawn time and locks it after the first turn (including our hidden
+ * primer), so the model can only be applied on a fresh session — `newSession`
+ * sets it before the primer runs, while the agent is still rebindable. The host
+ * uses this to fall back to a restart instead of surfacing the raw error.
+ */
+export function isIncompatibleAgentError(err: any): boolean {
+  if (err?.data?.code === "MODEL_SWITCH_INCOMPATIBLE_AGENT") return true;
+  // Fallback if a future CLI keeps the message but drops the structured code.
+  return /requires agent .+ but the active agent/i.test(err?.message ?? "");
+}

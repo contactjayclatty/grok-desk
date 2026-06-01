@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.4 — 2026-06-01
+
+### Model switching
+
+- **Switching to a model bound to a different agent now works instead of erroring.** Picking a model whose agent type differs from the running session — e.g. the Composer models, which belong to the CLI's `cursor` agent rather than `grok-build` — failed with `Cannot switch to model '…': it requires agent 'cursor' but the active agent is 'grok-build-plan'. Start a new session to use this model.` The CLI binds the agent at spawn and locks it after the first turn (including our hidden primer), so a live `session/set_model` can only stay within the same agent. The fix mirrors the reasoning-effort flow: the chosen model is persisted to `grok.defaultModel` and the session restarts, where `newSession` re-applies it *before* the primer runs — while the agent is still rebindable (verified against grok 0.2.3 in `research/*.cjs`). With no user history yet the restart is transparent; with history you get the same **Summarize & Restart** / **Just Restart** prompt as an effort change. Same-agent switches still happen live with history intact. ([src/sidebar.ts](src/sidebar.ts), [src/acp-dispatch.ts](src/acp-dispatch.ts))
+- **Model/effort changes are locked while the session is starting.** A model switch fired during the hidden-primer window raced that turn: a probe showed `session/set_model` sometimes lands *before* the agent locks (applied live) and sometimes *after* (rejected → restart), so switching on a fresh-looking empty session would intermittently appear to "do nothing". The model button and effort dots are now disabled while a turn is in flight or the session is priming — the same `busy` signal that disables send/submit — and the host ignores model/effort messages that slip through the start window. The control re-enables the moment the session is ready. ([media/chat.js](media/chat.js), [src/sidebar.ts](src/sidebar.ts))
+
+### UI
+
+- **The model button shows the user-facing name everywhere.** The gear popover's model button showed the raw model ID (`grok-build`) while the dropdown showed the friendly name (`Grok Build`). Both now resolve through a pure `modelDisplayName()` helper, falling back to the ID only when a model has no name. ([media/webview-helpers.js](media/webview-helpers.js), [media/chat.js](media/chat.js))
+
 ## 1.2.3 — 2026-05-30
 
 ### Plan mode

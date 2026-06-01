@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractPromptMeta,
+  isIncompatibleAgentError,
   makeAckResponse,
   makeExitPlanResponse,
   makePermissionResponse,
@@ -202,5 +203,38 @@ describe("response builders", () => {
       method: "session/new",
       params: { cwd: "." },
     });
+  });
+});
+
+describe("isIncompatibleAgentError", () => {
+  // Verbatim error captured from grok 0.2.3 when switching to a composer model
+  // mid-session (research/*.cjs probe). The model belongs to the `cursor` agent
+  // but the session is bound to `grok-build-plan`.
+  const real = {
+    code: -32600,
+    message:
+      "Cannot switch to model 'grok-composer-2.5-fast': it requires agent 'cursor' but the active agent is 'grok-build-plan'. Start a new session to use this model.",
+    data: {
+      code: "MODEL_SWITCH_INCOMPATIBLE_AGENT",
+      activeAgentType: "grok-build-plan",
+      requiredAgentType: "cursor",
+      modelId: "grok-composer-2.5-fast",
+      suggestion: "start_new_session",
+    },
+  };
+
+  it("detects the structured MODEL_SWITCH_INCOMPATIBLE_AGENT code", () => {
+    expect(isIncompatibleAgentError(real)).toBe(true);
+  });
+
+  it("falls back to the message when the structured code is absent", () => {
+    expect(isIncompatibleAgentError({ message: real.message })).toBe(true);
+  });
+
+  it("does not match unrelated errors", () => {
+    expect(isIncompatibleAgentError({ code: -32000, message: "Grok process exited (code 1)" })).toBe(false);
+    expect(isIncompatibleAgentError({ data: { code: "SOMETHING_ELSE" } })).toBe(false);
+    expect(isIncompatibleAgentError(undefined)).toBe(false);
+    expect(isIncompatibleAgentError(new Error("network timeout"))).toBe(false);
   });
 });
