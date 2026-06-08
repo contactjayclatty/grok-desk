@@ -366,16 +366,54 @@ code {
 
 /* Generated media (grok /imagine image, /imagine-video video) */
 .generated-image {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
   margin: 6px var(--pad);
 }
 .generated-image img,
 .generated-image video {
-  max-width: 100%;
+  /* Cap the rendered size — full-resolution generations are impractical to view
+     inline. 640px on the longer edge keeps them legible without flooding the
+     chat; the file itself is untouched (Open in VS Code shows full res). */
+  max-width: min(100%, 640px);
+  max-height: 640px;
+  width: auto;
   height: auto;
   border-radius: 6px;
   border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
   display: block;
 }
+/* Hover actions over the media's top-right corner — mirrors .code-copy-btn. */
+.generated-media-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 1;
+}
+.generated-image:hover .generated-media-actions { opacity: 1; }
+.generated-media-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  padding: 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.generated-media-btn:hover,
+.generated-media-btn:focus-visible {
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
+  color: var(--vscode-foreground);
+}
+.generated-media-btn.copied { color: var(--vscode-charts-green, #4ec9b0); }
 
 /* Subagent delegation card */
 .subagent-card {

@@ -63,6 +63,58 @@ describe("addGeneratedMedia (/imagine-video video)", () => {
   });
 });
 
+describe("addGeneratedMedia hover actions (copy path / open in VS Code)", () => {
+  const btnByTitle = (wrap: Element, title: string) =>
+    [...wrap.querySelectorAll(".generated-media-btn")].find(
+      (b) => b.getAttribute("title") === title,
+    ) as HTMLButtonElement | undefined;
+
+  it("an image exposes copy-path + open icons; the open icon posts openFile", () => {
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, { type: "media", media: "image", src: IMG_DATA, path: "/sessions/abc/images/cat.jpg" });
+    const wrap = messages(doc).querySelector(".generated-image")!;
+
+    expect(btnByTitle(wrap, "Copy path")).toBeTruthy();
+    const openBtn = btnByTitle(wrap, "Open in VS Code")!;
+    expect(openBtn).toBeTruthy();
+
+    click(window, openBtn);
+    expect(posted).toContainEqual({ type: "openFile", path: "/sessions/abc/images/cat.jpg" });
+  });
+
+  it("a video — which has no click-to-open — still exposes the open icon", () => {
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, { type: "media", media: "video", src: VIDEO_DATA, path: "/sessions/abc/videos/clip.mp4" });
+    const wrap = messages(doc).querySelector(".generated-image.generated-video")!;
+
+    const openBtn = btnByTitle(wrap, "Open in VS Code")!;
+    expect(openBtn).toBeTruthy();
+    click(window, openBtn);
+    expect(posted).toContainEqual({ type: "openFile", path: "/sessions/abc/videos/clip.mp4" });
+  });
+
+  it("copy-path writes the on-disk path to the clipboard", () => {
+    const { window, doc } = bootWebview();
+    let copied = "";
+    Object.defineProperty((window as any).navigator, "clipboard", {
+      value: { writeText: (t: string) => { copied = t; return Promise.resolve(); } },
+      configurable: true,
+    });
+    dispatch(window, { type: "media", media: "image", src: IMG_DATA, path: "/sessions/abc/images/cat.jpg" });
+    const wrap = messages(doc).querySelector(".generated-image")!;
+
+    click(window, btnByTitle(wrap, "Copy path")!);
+    expect(copied).toBe("/sessions/abc/images/cat.jpg");
+  });
+
+  it("the remote-link fallback (no on-disk path) has no hover actions", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "media", media: "image", url: "https://x.ai/generated/cat.jpg" });
+    const wrap = messages(doc).querySelector(".generated-image")!;
+    expect(wrap.querySelector(".generated-media-actions")).toBeNull();
+  });
+});
+
 describe("addGeneratedMedia (remote link fallback)", () => {
   it("renders an open-link button (not an <img>) when only a url is supplied", () => {
     const { window, posted, doc } = bootWebview();

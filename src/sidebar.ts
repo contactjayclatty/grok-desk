@@ -1251,9 +1251,21 @@ See design doc for the full state machine diagram.`;
         break;
       }
       case "runMcpList": {
-        const term = vscode.window.createTerminal("Grok MCP");
+        // Run grok as the terminal's own process (shellPath/shellArgs) rather than
+        // typing a quoted path into the user's shell. On Windows the default
+        // terminal is PowerShell, which parses `"C:\…\grok.exe" mcp list` as a
+        // string literal and errors "Unexpected token". Launching the binary
+        // directly sidesteps shell quoting entirely and behaves the same on
+        // PowerShell, cmd, and POSIX shells.
+        const mcpCli = this.cliPath || locateGrokCli(
+          vscode.workspace.getConfiguration("grok").get<string>("cliPath", ""),
+        );
+        const mcpCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const term = mcpCli
+          ? vscode.window.createTerminal({ name: "Grok MCP", shellPath: mcpCli, shellArgs: ["mcp", "list"], cwd: mcpCwd })
+          : vscode.window.createTerminal("Grok MCP");
         term.show();
-        term.sendText(`"${this.cliPath || "grok"}" mcp`);
+        if (!mcpCli) term.sendText("grok mcp list");
         break;
       }
       case "showLogs":

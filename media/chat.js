@@ -596,13 +596,17 @@
       state.grokUpdate = { checking: true };
       vscode.postMessage({ type: "checkGrokUpdate" });
     }
+    const u = state.grokUpdate || {};
     gearPopover.innerHTML = "";
     addGearItem('<span class="popover-back">← About</span>', renderGearMain);
-    addGearInfo(`<span>Extension</span><span class="popover-ver">v${escapeHtml(state.extVersion || "?")}</span>`);
-    addGearInfo(`<span>Grok Build</span><span class="popover-ver">${state.cliVersion ? "v" + escapeHtml(state.cliVersion) : "—"}</span>`);
+    addGearInfo(`<span>This extension</span><span class="popover-ver">v${escapeHtml(state.extVersion || "?")}</span>`);
+    // The CLI version comes from the ACP `initialize` handshake, but the native
+    // Windows build doesn't report one there — so fall back to the version the
+    // update check returns (its `currentVersion`), which is always populated.
+    const cliVer = state.cliVersion || u.current || "";
+    addGearInfo(`<span>Grok Build CLI</span><span class="popover-ver">${cliVer ? "v" + escapeHtml(cliVer) : "—"}</span>`);
 
-    const u = state.grokUpdate || {};
-    let statusHtml, canUpdate = false, disabledTitle = "";
+    let statusHtml, canUpdate = false;
     if (u.checking) {
       statusHtml = '<span class="loading-dots">Checking for updates</span>';
     } else if (u.error) {
@@ -612,22 +616,21 @@
       statusHtml = `<span class="popover-update-avail">Update available · v${escapeHtml(u.latest || "")}</span>`;
       canUpdate = true;
     } else if (u.current || u.latest) {
-      statusHtml = '<span class="popover-ver">Up to date</span>';
-      disabledTitle = "Already on the latest version";
+      statusHtml = '<span class="popover-ver">CLI is up to date</span>';
     } else {
       statusHtml = '<span class="popover-ver">—</span>';
     }
     addGearInfo(statusHtml);
 
-    const btn = document.createElement("div");
-    btn.className = "toolbar-popover-item popover-action" + (canUpdate ? "" : " disabled");
-    btn.innerHTML = "<span>Update Grok Build</span>";
+    // The update action only appears when there's actually something to do —
+    // when the CLI is up to date the grayed status line above says so on its own.
     if (canUpdate) {
+      const btn = document.createElement("div");
+      btn.className = "toolbar-popover-item popover-action";
+      btn.innerHTML = "<span>Update Grok Build CLI</span>";
       btn.onclick = (e) => { e.stopPropagation(); vscode.postMessage({ type: "updateGrok" }); closePopovers(); };
-    } else if (disabledTitle) {
-      btn.title = disabledTitle;
+      gearPopover.appendChild(btn);
     }
-    gearPopover.appendChild(btn);
   }
 
   // Config & debug: the former Config + Debug items behind one sub-view.
@@ -1239,10 +1242,48 @@
     scrollToBottom();
   }
 
+  // Hover actions for an inlined image/video, anchored top-right like the
+  // code-block copy button: copy the on-disk path, or open it in VS Code. Both
+  // are the only way to reach a *video's* file (its click drives playback
+  // controls, so the click-to-open we give images can't apply there).
+  function buildMediaActions(path) {
+    const actions = document.createElement("div");
+    actions.className = "generated-media-actions";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "generated-media-btn";
+    copyBtn.title = "Copy path";
+    copyBtn.innerHTML = ICON.copy;
+    copyBtn.onclick = (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(path).then(() => {
+        copyBtn.innerHTML = ICON.check;
+        copyBtn.classList.add("copied");
+        setTimeout(() => { copyBtn.innerHTML = ICON.copy; copyBtn.classList.remove("copied"); }, 1500);
+      });
+    };
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "generated-media-btn";
+    openBtn.title = "Open in VS Code";
+    openBtn.innerHTML = ICON.file;
+    openBtn.onclick = (e) => {
+      e.stopPropagation();
+      vscode.postMessage({ type: "openFile", path });
+    };
+
+    actions.appendChild(copyBtn);
+    actions.appendChild(openBtn);
+    return actions;
+  }
+
   // Render generated media (grok `/imagine` image or `/imagine-video` video).
   // The host has already inlined file-path output as a data: URI; `url` is a
   // remote link we open externally. Clicking an inlined image opens its source
-  // file in VS Code; video gets native <video> controls.
+  // file in VS Code; video gets native <video> controls. Both expose hover
+  // icons (copy path / open in VS Code) over the top-right corner.
   function addGeneratedMedia(msg) {
     if (state.suppressReplayTurn) return;
     const isVideo = msg.media === "video";
@@ -1270,6 +1311,7 @@
         }
         el.appendChild(img);
       }
+      if (msg.path) el.appendChild(buildMediaActions(msg.path));
     } else if (msg.url) {
       const link = document.createElement("button");
       link.className = "preview-link";
@@ -2212,12 +2254,15 @@
         state.extVersion = msg.extVersion || "";
         break;
       case "grokUpdateStatus":
-        // Reply to the About panel's checkGrokUpdate. Refresh the panel if it's
-        // the visible gear view (re-render with check=false → no request loop).
+        // Reply to the About panel's checkGrokUpdate. The check also reports the
+        // CLI's current version — adopt it, since the ACP handshake doesn't always
+        // give us one (native Windows build) and otherwise the panel would show a
+        // bare "—" right next to a confident "CLI is up to date".
         state.grokUpdate = {
           current: msg.current, latest: msg.latest,
           updateAvailable: !!msg.updateAvailable, error: msg.error || null,
         };
+        if (msg.current) state.cliVersion = msg.current;
         if (!gearPopover.hidden && state.gearView === "about") renderAboutPanel(false);
         break;
       case "initialized": {

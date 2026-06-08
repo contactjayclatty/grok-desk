@@ -345,9 +345,9 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
     click(h.window, itemByText(h.doc, "About"));
 
     const text = gear(h.doc).textContent || "";
-    expect(text).toContain("Extension");
+    expect(text).toContain("This extension");
     expect(text).toContain("v1.4.0");
-    expect(text).toContain("Grok Build");
+    expect(text).toContain("Grok Build CLI");
     expect(text).toContain("v0.2.33");
     expect(types(h.posted)).toContain("checkGrokUpdate");
   });
@@ -367,19 +367,29 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
     expect(types(h.posted)).toContain("updateGrok");
   });
 
-  it("disables Update Grok Build when already up to date", () => {
+  it("shows a grayed up-to-date status and no update action when current", () => {
     const h = boot();
     click(h.window, $(h.doc, "gear-btn"));
     click(h.window, itemByText(h.doc, "About"));
     dispatch(h.window, { type: "grokUpdateStatus", current: "0.2.33", latest: "0.2.33", updateAvailable: false });
 
-    expect(gear(h.doc).textContent).toContain("Up to date");
-    const btn = itemByText(h.doc, "Update Grok Build");
-    expect(btn.className).toContain("disabled");
+    expect(gear(h.doc).textContent).toContain("up to date");
+    expect(itemByText(h.doc, "Update Grok Build")).toBeUndefined();
+  });
 
-    h.posted.length = 0;
-    click(h.window, btn);
-    expect(types(h.posted)).not.toContain("updateGrok");
+  it("falls back to the update check's version when the handshake gave none", () => {
+    const h = bootWebview();
+    dispatch(h.window, { type: "initialState", useCtrlEnter: false, effort: "", cwd: "/x", extVersion: "1.4.0" });
+    // No `initialized` version (native Windows build) — the panel starts at "—".
+    dispatch(h.window, { type: "session", sessionId: "s1", models: [], currentModelId: "grok-build" });
+    click(h.window, $(h.doc, "gear-btn"));
+    click(h.window, itemByText(h.doc, "About"));
+    dispatch(h.window, { type: "grokUpdateStatus", current: "0.2.3", latest: "0.2.3", updateAvailable: false });
+
+    const text = gear(h.doc).textContent || "";
+    expect(text).toContain("Grok Build CLI");
+    expect(text).toContain("v0.2.3");
+    expect(text).not.toContain("—");
   });
 
   it("the About back row returns to the main menu", () => {
