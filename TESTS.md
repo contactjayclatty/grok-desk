@@ -1,21 +1,22 @@
 # Test Design
 
-Two layers:
+Three layers:
 
-1. **Grok-free automated tests** (Vitest) — pure-logic unit tests plus happy-dom DOM tests that drive the real `media/chat.js`, plus a fast TerminalManager suite that spawns real `/bin/sh` children. **368 tests, all passing in ~1.5s.** The per-file counts below predate several feature releases (voice, ask-question, plan-mode, v1.4.0 media/subagent/logout) and are indicative, not exact — `npm test` is the source of truth. **None of them spawn the `grok` binary**, so the whole suite runs in CI on a clean Ubuntu box (`.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` and never installs grok).
-2. **VS Code integration tests** (deferred to v0.2 with `@vscode/test-electron`) — covers command registration, view lifecycle, settings reads, and the diff editor. Deferred because they require a headed VS Code, are slow, and the modules already cover the bug-prone surface.
+1. **Grok-free automated tests** (Vitest) — pure-logic unit tests plus happy-dom DOM tests that drive the real `media/chat.js`, plus a fast TerminalManager suite that spawns real `/bin/sh` children. **375 tests, all passing in a few seconds.** The per-file counts below predate several feature releases (voice, ask-question, plan-mode, v1.4.0 media/subagent/logout) and are indicative, not exact — `npm test` is the source of truth. **None of them spawn the `grok` binary**, so the whole suite runs in CI on a clean Ubuntu box (`.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` and never installs grok). **CI runs this exact suite — `npm test` locally ≡ CI, verbatim.**
+2. **Real-grok pre-release suite** (`npm run test:live`, `scripts/live-tests.cjs`) — an **on-demand, run-on-request** gate that spawns the real `grok` binary and drives it over ACP end-to-end: handshake, prompt round-trip, session restore, plan-mode gate, image gen, video gen, subagent delegation. It **reuses the real compiled modules** (`out/acp-dispatch.js`, `out/plan-gate.js`, `media/webview-helpers.js`) so it tests shipped logic, not re-implementations. Non-deterministic / entitlement-gated outcomes **SKIP** (don't fail the gate); only a real regression **FAILS**. It is **never run by `npm test` or CI** — it needs an authenticated `grok` + network + subscription, and it's the human's pre-release checklist, not a commit gate. Flags: `--quick`, `--only=<name>`, `--skip=<name>`, `GROK_BIN=<path>`. See [CLAUDE.md § Test taxonomy](CLAUDE.md).
+3. **VS Code integration tests** (deferred to v0.2 with `@vscode/test-electron`) — covers command registration, view lifecycle, settings reads, and the diff editor. Deferred because they require a headed VS Code, are slow, and the modules already cover the bug-prone surface.
 
-Separately, **grok-dependent probes** live as standalone scripts under `research/*.cjs`. They exercise the real CLI's ACP behavior (e.g. confirming `exit_plan_mode` treats any client reply as approval) and are run **manually** — Vitest's `include` glob is `test/**/*.test.ts`, so it never collects them. They're non-destructive (ACK writes without touching disk and run in a temp cwd) and require a `grok` binary on PATH; CI doesn't run them.
+Separately, **grok-dependent probes** live as standalone scripts under `research/*.cjs`. They exercise the real CLI's ACP behavior (e.g. confirming `exit_plan_mode` treats any client reply as approval, or capturing the native-Windows media/subagent wire shapes) and are run **manually** — Vitest's `include` glob is `test/**/*.test.ts`, so it never collects them. They're non-destructive (ACK writes without touching disk and run in a temp cwd) and require a `grok` binary on PATH; CI doesn't run them. The probes are the **discovery** tool (capture an undocumented shape once); layer 2 is the **regression** tool (re-verify the shapes still hold before each release).
 
-The goal of layer (1) is to make the protocol surface and UI logic regression-proof. Anything that goes wrong against the real CLI in v0.2 should fall into a documented gap (network, auth, model entitlement, terminal handlers) — not into our protocol or webview code.
+The goal of layers (1)+(2) is to make the protocol surface and UI logic regression-proof. Layer 1 catches logic regressions on every commit; layer 2 catches CLI-contract drift (a new grok version changing a wire shape) before each release.
 
 ---
 
 ## What we test
 
-### `test/acp-dispatch.test.ts` — protocol primitives (48 tests)
+### `test/acp-dispatch.test.ts` — protocol primitives (54 tests)
 
-Includes v1.4.0 generated-media extraction: `isMediaGenToolCall` / `extractGeneratedMediaPaths` (image_gen + image_to_video, image-vs-video classification, the collapsed-resume shape) and the ACP-standard `extractImageContent`/`collectToolImages` fallback.
+Includes v1.4.0 generated-media extraction: `isMediaGenToolCall` / `extractGeneratedMediaPaths` covering **both** wire forms — the Linux/macOS JSON-in-text (`image_gen`, `image_to_video`) and the **native-Windows prose-in-text** (`Image/Video generated and saved to \\?\C:\…`, tool names `image_gen` / `video_gen`, variants `ImageGen` / `VideoGen`) — with image-vs-video classification, `\\?\` extended-path stripping, the trailing-period-not-swallowed guard, and the collapsed-resume shape. Plus the ACP-standard `extractImageContent`/`collectToolImages` fallback.
 
 
 The wire format is the highest-value test surface: ACP changes break everything else if we miss them.
@@ -92,7 +93,7 @@ These actually spawn real `/bin/sh` children — fast enough to keep in the unit
 - Sorts by most-recently-updated; tolerates malformed/missing session files without throwing
 - Delete removes the right entry and leaves others intact
 
-### `test/plan-gate.test.ts` — plan-mode policy (32 tests)
+### `test/plan-gate.test.ts` — plan-mode policy (38 tests)
 
 The pure heart of client-side plan enforcement. No spawn, no fs — just the classification logic the two choke points call.
 
@@ -101,9 +102,9 @@ The pure heart of client-side plan enforcement. No spawn, no fs — just the cla
 - **Shell-metachar rejection** — redirection (`>`), chaining (`;`, `&&`, `||`), background (`&`), command substitution (`$(…)`, backticks), process substitution (`<(…)`), and script-block braces (`{}`) are rejected outright, so a read-only head can't smuggle a side effect
 - **Permission / plan-file classification** — recognizes grok's plan-file write so it can be allowed-and-snooped rather than blocked
 
-### `test/webview-helpers.test.ts` — pure webview helpers (45 tests)
+### `test/webview-helpers.test.ts` — pure webview helpers (46 tests)
 
-Includes the v1.4.0 subagent classifier `isSubagentToolCall` / `subagentLabel` (the confirmed `spawn_subagent` + `subagent_type` shape, plus name/kind/rawInput fallbacks).
+Includes the v1.4.0 subagent classifier `isSubagentToolCall` / `subagentLabel` (the forward-compat `spawn_subagent` + `subagent_type` shape, name/kind/rawInput fallbacks, **and the regression guard that grok's `get_command_or_subagent_output` poller is NOT carded** — its name contains "subagent" but it's a background-task output reader, not a delegation; see `research/subagents.md`).
 
 
 Shared between the shipped webview and the tests (`media/webview-helpers.js`).
@@ -193,11 +194,12 @@ happy-dom test locking in the native-Windows regressions this build fixed, so th
 ## Running
 
 ```bash
-npm test            # one shot
+npm test            # layer 1 — grok-free, what CI runs
 npm run test:watch  # TDD loop
+npm run test:live   # layer 2 — real grok, on-demand pre-release gate (run on request)
 ```
 
-Tests run in <2s with no network, no `grok` binary, and no fixtures, so they're suitable for pre-commit hooks and CI.
+Layer 1 runs in a few seconds with no network, no `grok` binary, and no fixtures, so it's suitable for pre-commit hooks and CI. Layer 2 needs an authenticated `grok` on PATH (or `GROK_BIN=<path>`), network, and a subscription for the media tests — it's the **pre-release** checklist, run on request, never on commit.
 
 ---
 

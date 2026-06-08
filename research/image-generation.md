@@ -2,16 +2,19 @@
 
 Confirmed live against **grok 0.2.33** (device-auth login, subscription account),
 `grok agent stdio`. Probes: `research/imagine-probe.cjs` (image),
-`research/video-probe.cjs` (video).
+`research/video-probe.cjs` (video). **Re-confirmed against the native-Windows
+build `grok` 0.2.3** — which reports the saved path differently (prose, not JSON)
+and uses a different video tool name. See [§ Native-Windows differences](#native-windows-differences-grok-02x).
 
 ## Summary
 
 `/imagine` and `/imagine-video` are **subscription-only**. They run via grok's
 built-in media tools, and the output file is **written to the session directory by
 grok itself** — it does **not** come back as an ACP `image` / `resource` /
-`resource_link` content block. Instead the file path is reported as a **JSON
-string inside a `text` content block** on the completed tool update. Same shape for
-both images and videos; only the folder + extension differ.
+`resource_link` content block. Instead the file path is reported **inside a `text`
+content block** on the completed tool update. Same idea for both images and videos;
+only the folder + extension differ — and on native-Windows the text is **prose**
+rather than JSON (next sections).
 
 This is why a naive "render ACP image blocks" implementation renders nothing — the
 real payload has to be parsed out of the tool result text.
@@ -74,6 +77,33 @@ prompt "generate a red cube then animate it with image_to_video":
 - `reference_to_video` is analogous (`variant: "ReferenceToVideo"`); unprobed but
   covered by the same detector/extractor.
 
+## Native-Windows differences (`grok` 0.2.x)
+
+Both the **tool name** and the **completed-result text** differ on the native
+build (captured live; the `image-gen`/`video-gen` live tests in
+`scripts/live-tests.cjs` pin all of this):
+
+| | Linux/macOS 0.2.33 | Native-Windows 0.2.3 |
+|---|---|---|
+| Image tool | `image_gen` → `imagine:` (variant `ImageGen`) | same |
+| Video tool | `image_to_video` → `image-to-video:` (variant `ImageToVideo`) | **`video_gen`** → **`imagine-video:`** (variant **`VideoGen`**) — direct text-to-video, no source image |
+| Result text | **JSON** `{"path":"…","filename":…,"session_folder":…}` | **prose** `Image generated and saved to \\?\C:\…\images\1.jpg.` |
+| Path form | absolute, URL-encoded cwd segment | Windows path, often **`\\?\` extended-length prefixed** |
+
+Verbatim native-Windows completed results:
+
+```
+Image generated and saved to \\?\C:\Users\Dell\.grok\sessions\<enc-cwd>\<sid>\images\1.jpg.
+Video generated and saved to \\?\C:\Users\Dell\.grok\sessions\<enc-cwd>\<sid>\videos\1.mp4.
+```
+
+The extractor handles **both** forms: `JSON.parse` the text and read `.path`;
+when that fails (`parsed === undefined`), fall back to a path regex over the prose
+(`MEDIA_PATH_IN_TEXT_RE`) that matches image **and** video extensions, with the
+`\\?\` prefix stripped by `cleanMediaPath`. The trailing sentence period is **not**
+swallowed into the path (lookahead on the extension). `isMediaGenToolCall` matches
+`video_gen` / `imagine-video:` / variant `VideoGen` in addition to the Linux names.
+
 ## How the extension handles it
 
 - `isMediaGenToolCall(payload)` — flags the tool by `title` (`image_gen` /
@@ -110,8 +140,9 @@ renders on resume with no extra code. The webview only suppresses the primer tur
 
 ## Notes
 
-- `/imagine-video` (subscription) was not probed; expect an analogous tool
-  reporting a video file path. The path extractor only accepts image extensions,
-  so video would currently fall through — revisit if/when we support it.
+- `/imagine-video` is **fully probed and live-tested on native-Windows** (tool
+  `video_gen`, variant `VideoGen`, prose result). The path extractor accepts video
+  extensions and tags `media: "video"` — confirmed end-to-end (`video-gen` live
+  test renders a real `.mp4`).
 - `initialize` advertises `promptCapabilities.image:false` — that's the **input**
   flag (sending images *to* grok), unrelated to image-generation **output**.

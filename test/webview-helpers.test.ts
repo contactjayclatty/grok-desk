@@ -271,6 +271,19 @@ describe("isSubagentToolCall", () => {
     expect(isSubagentToolCall(null)).toBe(false);
     expect(isSubagentToolCall({})).toBe(false);
   });
+
+  it("does NOT match grok's get_command_or_subagent_output poller", () => {
+    // Native-Windows grok 0.2.x delegates via a background run_terminal_command
+    // and reads its output with `get_command_or_subagent_output` (variant
+    // "TaskOutput", task_id). That output reader's NAME contains "subagent" but
+    // it is not a delegation — it must never get a Subagent card. Verbatim wire
+    // shape from research/subagents.md.
+    expect(isSubagentToolCall({ title: "get_command_or_subagent_output", rawInput: { task_id: "t1" } })).toBe(false);
+    expect(isSubagentToolCall({ title: "Get task output: t1", rawInput: { variant: "TaskOutput", task_id: "t1", block: true } })).toBe(false);
+    // the background run_terminal_command that actually spawns it is also not
+    // (mis)matched as a subagent — it's a plain terminal call over the wire.
+    expect(isSubagentToolCall({ title: "run_terminal_command", rawInput: { variant: "Bash", command: "powershell ...", is_background: true } })).toBe(false);
+  });
 });
 
 describe("subagentLabel", () => {

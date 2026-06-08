@@ -38,9 +38,23 @@ Pure modules (`acp-dispatch`, `chips`, `prompt-builder`, `slash-filter`, `cli-lo
 
 ```bash
 npm install
-npm test         # 368 tests, ~1.5s, vitest — all grok-free (incl. happy-dom DOM tests + fake-CLI ACP integration tests)
+npm test         # 375 tests, ~1.5s, vitest — all grok-free (incl. happy-dom DOM tests + fake-CLI ACP integration tests)
 npm run package  # → grok-vscode-phuryn-1.4.0.vsix
 ```
+
+### Test taxonomy — three layers
+
+There are **three** kinds of tests, and it matters which is which:
+
+1. **`npm test` — grok-free unit/DOM/integration suite (375 tests).** Pure logic, happy-dom tests that drive the real `media/chat.js`, a real-`/bin/sh` TerminalManager smoke, and a fake-CLI ACP integration suite (`test/fixtures/fake-grok-acp.cjs`). **Never spawns the real `grok` binary.** Runs in <2s with no network, no login, no subscription. This is the floor — every change keeps it green.
+2. **CI — the *same* suite.** `.github/workflows/ci.yml` runs `npm ci && npm test && npm run package` on a clean Ubuntu box. **CI ≡ layer 1, verbatim** — there is no separate CI-only set. CI has no `grok` binary, no auth, no SuperGrok subscription, so it *cannot* run anything that touches the real CLI. That's the whole reason layer 1 is grok-free.
+3. **`npm run test:live` — on-demand pre-release suite against REAL grok (`scripts/live-tests.cjs`).** Spawns the actual `grok agent stdio` and exercises the surfaces layers 1–2 can't: the real ACP handshake, a prompt round-trip, session restore, plan-mode enforcement, and the v1.4.0 features (image gen, video gen, subagents). It **reuses the real compiled modules** (`out/acp-dispatch.js`, `out/plan-gate.js`, `media/webview-helpers.js`) — it feeds genuine wire output through the same `isMediaGenToolCall`/`extractGeneratedMediaPaths`/`isSubagentToolCall`/`shouldBlockWrite` the extension uses, not a re-implementation. **Run it manually before every release-to-`main`** (the user triggers it; it needs a logged-in grok + subscription and burns credits, so it must never be in `npm test` or CI). Flags: `--quick` (skip the slow generative tests), `--only=`, `--skip=`, `GROK_BIN=…`. A SKIP (no subscription, grok chose not to delegate, etc.) does not fail the gate — only a FAIL does. Real-grok **diagnostic probes** (`research/*.cjs`) remain manual one-offs for capturing wire shapes; the live suite is the repeatable gate.
+
+**So:** local == CI (both grok-free). The real-grok tests are a separate, manual, pre-release gate — run on request, not on commit.
+
+### grok CLI version + updating
+
+The native-Windows build (`irm https://x.ai/cli/install.ps1 | iex`) is **`grok` 0.2.3** on the **stable** channel; the Linux probes in the docs were against 0.2.33 (a different release line — note the gap when reconciling wire shapes). **grok does not auto-update.** Updating is the explicit `grok update` command: `grok update --check [--json]` checks without installing, `grok update` installs the latest on the current channel, `--stable` (default, weekly) / `--alpha` switch channels, `--version <X.Y.Z>` pins a specific build. Re-run `npm run test:live` after any CLI update — the wire format is the thing that drifts.
 
 ## Install
 

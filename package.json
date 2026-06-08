@@ -225,6 +225,7 @@
     "watch": "tsc -p . -w",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:live": "tsc -p . && node scripts/live-tests.cjs",
     "package": "npx @vscode/vsce package",
     "publish": "npx @vscode/vsce publish"
   },

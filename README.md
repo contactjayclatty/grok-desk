@@ -311,9 +311,12 @@ VS Code commands (not Grok slash commands). Open with **Ctrl+Shift+P** / **Cmd+S
 
 ```bash
 npm install
-npm test         # 368 tests, ~1.5s, vitest — no VS Code, no spawn (except terminal-manager)
+npm test         # 375 tests, vitest — grok-free; this is exactly what CI runs
+npm run test:live # real-grok pre-release gate (on request only — needs an authenticated grok)
 npm run package  # → grok-vscode-phuryn-<version>.vsix
 ```
+
+`npm test` is grok-free and is **the same suite CI runs** — local ≡ CI. `npm run test:live` is a **separate, on-demand** suite that drives the real `grok` binary end-to-end (handshake, restore, plan-mode, image/video gen, subagent); run it **before each release**, not on every commit. Full breakdown in [TESTS.md](TESTS.md).
 
 Pure tests are the floor — every change should keep them green. The split was made *specifically* so protocol bugs can be caught without spinning up VS Code:
 

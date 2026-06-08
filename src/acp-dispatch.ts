@@ -60,6 +60,20 @@ export type UpdateRoute =
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
 const VIDEO_EXT_RE = /\.(mp4|mov|webm|m4v)$/i;
 
+// An absolute path (Windows drive / `\\?\` extended-length / UNC, or POSIX)
+// ending in a known media extension, possibly embedded mid-sentence. Used to
+// recover the file path from native-Windows grok's PROSE result ("Image
+// generated and saved to <path>.") which — unlike the Linux/macOS JSON result —
+// isn't machine-parseable. The trailing lookahead stops at the sentence's
+// punctuation/whitespace so a trailing "." isn't swallowed into the path.
+const MEDIA_PATH_IN_TEXT_RE =
+  /(?:\\\\\?\\)?(?:[A-Za-z]:[\\/]|\/|\\\\)[^\r\n"'<>|?*]*?\.(?:png|jpe?g|gif|webp|bmp|svg|mp4|mov|webm|m4v)(?=$|[\s.,;:)"'\]])/gi;
+
+/** Drop a Windows `\\?\` extended-length prefix so the path is canonical for fs + Uri.file. */
+function cleanMediaPath(p: string): string {
+  return p.replace(/^\\\\\?\\/, "");
+}
+
 function isImageMime(m: unknown): boolean {
   return typeof m === "string" && m.toLowerCase().startsWith("image/");
 }
@@ -132,45 +146,62 @@ export function collectToolImages(payload: any): MediaRef[] {
 
 /**
  * True for grok's media-generation tool calls (`/imagine`, `/imagine-video`).
- * `image_gen` → relabeled `imagine: <prompt>` (rawInput.variant "ImageGen");
- * `image_to_video` → `image-to-video: <prompt>` (variant "ImageToVideo");
- * `reference_to_video` likewise. Confirmed against grok 0.2.33 — see
- * research/image-generation.md. The host tracks these ids so the *completed*
+ * The raw tool name and relabeled title differ by build/platform — confirmed
+ * live against native-Windows grok 0.2.x AND the Linux 0.2.33 probes:
+ *   - `/imagine`       → tool `image_gen`,  title `imagine: <prompt>`,        variant `ImageGen`
+ *   - `/imagine-video` → tool `video_gen`,  title `imagine-video: <prompt>`,  variant `VideoGen`
+ *     (older/Linux builds surfaced this as `image_to_video` / `image-to-video:`)
+ *   - `reference_to_video` likewise.
+ * See research/image-generation.md. The host tracks these ids so the *completed*
  * update (whose title is null) can still be recognized.
  */
 export function isMediaGenToolCall(payload: any): boolean {
   if (!payload || typeof payload !== "object") return false;
-  if (/^(image_gen\b|imagine:|image_to_video\b|image-to-video:|reference_to_video\b|reference-to-video:)/i
-      .test(String(payload.title ?? ""))) return true;
+  const title = String(payload.title ?? "");
+  if (/^imagine(-video)?:/i.test(title)) return true;                         // relabeled titles
+  if (/^(image_gen|video_gen|image_to_video|reference_to_video)\b/i.test(title)) return true; // raw tool names
+  if (/^(image-to-video:|reference-to-video:)/i.test(title)) return true;     // legacy relabels
   const ri = payload.rawInput;
   return !!(ri && typeof ri === "object" && typeof ri.variant === "string" &&
-    /imagegen|imagetovideo|referencetovideo/i.test(ri.variant));
+    /imagegen|videogen|imagetovideo|referencetovideo/i.test(ri.variant));
 }
 
 /**
- * Pull generated-image file paths out of a completed image_gen tool result.
- * grok does NOT use an ACP image/resource block — it writes the file to the
- * session dir and reports it as a JSON string inside a `text` content block:
- * `{"path":"…/images/1.jpg","filename":"1.jpg","session_folder":"images",…}` for
- * `/imagine`, and `{"path":"…/videos/1.mp4",…,"session_folder":"videos",…}` for
- * `/imagine-video`. We parse that out and hand back a path MediaRef (the host
- * inlines it), classifying image vs video by extension. Only paths with a known
- * image/video extension are accepted, so a non-media JSON result can't
- * masquerade as one.
+ * Pull generated-media file paths out of a completed image_gen/image_to_video
+ * tool result. grok does NOT use an ACP image/resource block — it writes the
+ * file to the session dir and reports the path inside a `text` content block, in
+ * one of two shapes depending on the build:
+ *
+ *  - **JSON** (Linux/macOS, older builds): `{"path":"…/images/1.jpg",…}` for
+ *    `/imagine`, `{"path":"…/videos/1.mp4",…}` for `/imagine-video`.
+ *  - **Prose** (native-Windows grok 0.2.x): a human sentence with the path
+ *    embedded, e.g. `Image generated and saved to \\?\C:\…\images\1.jpg.` —
+ *    `JSON.parse` can't see this, so we scan the text for an absolute media path.
+ *
+ * We hand back a path MediaRef (the host inlines it), classifying image vs video
+ * by extension. Only paths with a known image/video extension are accepted, so a
+ * non-media result can't masquerade as one.
  */
 export function extractGeneratedMediaPaths(payload: any): MediaRef[] {
   const arr = payload?.content;
   if (!Array.isArray(arr)) return [];
   const out: MediaRef[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string) => {
+    const p = cleanMediaPath(raw);
+    const media = mediaKindForPath(p);
+    if (media && !seen.has(p)) { seen.add(p); out.push({ media, kind: "path", path: p }); }
+  };
   for (const item of arr) {
     const block = item?.type === "content" ? item.content : item;
     if (block?.type !== "text" || typeof block.text !== "string") continue;
     let parsed: any;
-    try { parsed = JSON.parse(block.text); } catch { continue; }
-    const path = parsed?.path;
-    if (typeof path !== "string") continue;
-    const media = mediaKindForPath(path);
-    if (media) out.push({ media, kind: "path", path });
+    try { parsed = JSON.parse(block.text); } catch { /* prose, not JSON */ }
+    if (parsed && typeof parsed.path === "string") {
+      add(parsed.path);                                   // machine-readable JSON form
+    } else if (parsed === undefined) {
+      for (const m of block.text.matchAll(MEDIA_PATH_IN_TEXT_RE)) add(m[0]); // prose form
+    }
   }
   return out;
 }

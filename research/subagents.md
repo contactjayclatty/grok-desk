@@ -1,19 +1,48 @@
 # Subagents over ACP
 
-Confirmed against **grok 0.2.33** — primarily from the CLI's own bundled docs at
-`~/.grok/docs/user-guide/16-subagents.md` (grok reads these itself when asked to
-delegate), cross-checked with `grok --help` (`--agents <JSON>`, `--best-of-n`).
+Bundled-docs theory confirmed against **grok 0.2.33** (CLI docs at
+`~/.grok/docs/user-guide/16-subagents.md`, cross-checked with `grok --help`:
+`--agents <JSON>`, `--best-of-n`). **Live wire shape captured against the
+native-Windows build `grok` 0.2.3** (`research/subagents.md` probe + the
+`subagent` live test in `scripts/live-tests.cjs`) — and it does **not** match the
+docs. See [§ Ground truth](#ground-truth-native-windows-02x) below.
 
 ## Summary
 
 Subagents are **independent child sessions that run in parallel**, each with its
 own context window; the parent delegates work and gets a summary back. They're
-**enabled by default**. The main agent delegates by calling the **`spawn_subagent`**
-tool, which takes a **`subagent_type`** parameter selecting the child's role.
+**enabled by default**. The bundled docs say the main agent delegates by calling a
+**`spawn_subagent`** tool with a **`subagent_type`** parameter selecting the
+child's role — but that tool is **not what the native-Windows 0.2.x build actually
+emits over ACP** (next section). We keep `spawn_subagent` detection as
+forward-compat for builds that do emit it.
 
-Over ACP a delegation therefore arrives as an ordinary `tool_call` named
-`spawn_subagent` — there's no dedicated subagent ACP surface. Without a distinct
-card it disappears into the generic "ran N commands" tool group.
+## Ground truth (native-Windows 0.2.x)
+
+The live `grok` 0.2.3 build has **no `spawn_subagent` / `subagent_type` tool over
+ACP**. A delegation is a pair of ordinary tool calls:
+
+1. **`run_terminal_command`** with `rawInput.variant: "Bash"`,
+   `is_background: true`, content text `"Spawn background subagent to
+   investigate…"`, and a `[bg]`-prefixed title (`"Background task t1 started"`).
+   *This is the delegation* — the child runs as a backgrounded shell task.
+2. **`get_command_or_subagent_output`** with `rawInput.variant: "TaskOutput"`,
+   `task_id: "t1"`, title `"Get task output: t1"` — the parent **polls** the
+   background task's output. *This is a reader, not a delegation.*
+
+The trap: the poller's name contains the substring **"subagent"**, so a naive
+`/subagent/` match false-fires a card on the output reader. The classifier
+explicitly excludes it (see below). The live suite's `subagent` test asserts the
+poller is **NOT** carded (`misfired.length === 0`) and that a real delegation is
+detected via the background spawn + poll pair.
+
+## `spawn_subagent` (forward-compat / other builds)
+
+| Field | Notes |
+|---|---|
+| tool name | `spawn_subagent` |
+| `subagent_type` | child role — built-ins below; project/user agents can add or shadow types |
+| (other rawInput) | the task prompt for the child |
 
 ## `spawn_subagent`
 
@@ -45,22 +74,23 @@ Disable subagents with `GROK_SUBAGENTS=0` or `[subagents] enabled = false`.
 ## How the extension handles it
 
 - `isSubagentToolCall(call)` / `subagentLabel(call)` (pure, in
-  `media/webview-helpers.js`) — match `spawn_subagent` (by name and by
-  `rawInput.subagent_type`), with broad fallbacks for relabeled titles / renames;
-  degrades gracefully (no match → existing tool-group behavior). The label is the
-  `subagent_type` (e.g. "general-purpose").
+  `media/webview-helpers.js`):
+  - match the forward-compat `spawn_subagent` shape (by name and by
+    `rawInput.subagent_type`), plus broad fallbacks for relabeled titles / renames;
+  - **explicitly exclude the `get_command_or_subagent_output` poller** — an
+    early-return on names ending in `output` or starting with `getcommand`, so the
+    "subagent"-in-the-name reader never cards;
+  - degrade gracefully (no match → existing tool-group behavior). The label is the
+    `subagent_type` (e.g. "general-purpose"), else a generic "Subagent".
 - `media/chat.js` renders a distinct **Subagent: \<type\>** card
   (`addSubagentCard`); `media/chat.css` `.subagent-card`.
 
-## Still open (couldn't capture live)
+## Still open
 
-A trivial prompt did **not** make grok-build spawn a subagent — it just ran
-`run_terminal_command`. Triggering a real `spawn_subagent` is non-deterministic
-and needs a genuinely delegation-worthy task (or defined `.grok/agents`). So we
-have the **tool name + params confirmed from docs**, but not a captured live
-`spawn_subagent` tool_call payload. Two follow-ups for when one is captured:
-
-1. Confirm the exact relabeled update title and the full `rawInput` shape.
-2. Build the real **nested inspector**: correlate each child's tool calls under
-   its parent card (needs to learn how child updates carry the parent id — likely
-   a nested session id or a `_meta` field). Today's card is a flat labeled marker.
+The **nested inspector** is still TODO: correlate each child's tool calls under
+its parent card. On native-Windows the correlation key is the background
+`task_id` (`"t1"`) shared between the spawn `run_terminal_command` and the
+`get_command_or_subagent_output` polls — so a future inspector can group the
+poll output under the spawn card by `task_id`. Today's card is a flat labeled
+marker; the live suite's `subagent` test guards the two invariants we rely on
+(real delegation detected, poller not carded).

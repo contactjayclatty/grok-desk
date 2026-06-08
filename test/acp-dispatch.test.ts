@@ -350,11 +350,15 @@ describe("routeSessionUpdate media chunks", () => {
 });
 
 describe("media generation (grok's real /imagine + /imagine-video wire shapes)", () => {
-  // Confirmed against grok 0.2.33 (research/image-generation.md): images come from
-  // `image_gen` (relabeled `imagine: <prompt>`, rawInput.variant "ImageGen") and
-  // videos from `image_to_video` (`image-to-video: <prompt>`, variant
-  // "ImageToVideo"). Both report the file as JSON inside a text block on the
-  // completed update — images in `images/*.jpg`, videos in `videos/*.mp4`.
+  // Confirmed against grok 0.2.33 / native-Windows 0.2.x (research/image-generation.md).
+  // Images come from `image_gen` (relabeled `imagine: <prompt>`, rawInput.variant
+  // "ImageGen"); videos from `video_gen` (`imagine-video: <prompt>`, variant
+  // "VideoGen") on native Windows — older/Linux builds surfaced video as
+  // `image_to_video`/`image-to-video:`/"ImageToVideo". The completed update
+  // reports the saved file two ways depending on build:
+  //   - JSON (Linux/macOS): a `{"path":"…/images/1.jpg"}` text block.
+  //   - Prose (native Windows): a sentence "Image generated and saved to
+  //     \\?\C:\…\images\1.jpg." — no JSON, so the path is scanned out of the text.
   function completedWith(path: string) {
     return {
       sessionUpdate: "tool_call_update",
@@ -419,5 +423,60 @@ describe("media generation (grok's real /imagine + /imagine-video wire shapes)",
     expect(extractGeneratedMediaPaths(replayed)).toEqual([
       { media: "video", kind: "path", path: "/root/.grok/sessions/s/videos/1.mp4" },
     ]);
+  });
+
+  // ── Native-Windows grok 0.2.x ────────────────────────────────────────────
+  // Two genuine regressions caught by the live suite (research/image-generation.md):
+  // (1) /imagine-video's tool is `video_gen`/`imagine-video:`/variant "VideoGen"
+  //     (the Linux probe had suggested `image_to_video`) — if unmatched the id is
+  //     never tracked and the result is dropped; (2) the completed result is PROSE
+  //     ("Image generated and saved to \\?\C:\…\1.jpg."), not JSON, so JSON.parse
+  //     threw and the path was lost. Strings below are verbatim wire captures.
+  describe("native-Windows shapes", () => {
+    function completedWithText(text: string) {
+      return {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-win",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text } }],
+      };
+    }
+
+    it("recognizes the native-Windows video tool (video_gen / imagine-video: / VideoGen)", () => {
+      expect(isMediaGenToolCall({ title: "video_gen", rawInput: { prompt: "a cube", duration: 8 } })).toBe(true);
+      expect(isMediaGenToolCall({ title: "imagine-video: a red cube slowly rotating" })).toBe(true);
+      expect(isMediaGenToolCall({ title: "imagine-video: x", rawInput: { variant: "VideoGen", prompt: "x" } })).toBe(true);
+    });
+
+    it("recognizes the native-Windows image tool (image_gen / imagine: / ImageGen)", () => {
+      expect(isMediaGenToolCall({ title: "image_gen", rawInput: { prompt: "a cube", aspect_ratio: "1:1" } })).toBe(true);
+      expect(isMediaGenToolCall({ title: "imagine: a small red cube" })).toBe(true);
+      expect(isMediaGenToolCall({ title: "imagine: x", rawInput: { variant: "ImageGen" } })).toBe(true);
+    });
+
+    it("extracts an image path from the prose result and strips the \\\\?\\ prefix", () => {
+      const prose = String.raw`Image generated and saved to \\?\C:\Users\Dell\.grok\sessions\C%3A%5CUsers%5CDell%5CAppData%5CLocal%5CTemp%5Cgrok-winmedia-lOd7PM\019ea7f4-3495-77b1-84f5-177e4ff37e1c\images\1.jpg.`;
+      expect(extractGeneratedMediaPaths(completedWithText(prose))).toEqual([
+        { media: "image", kind: "path", path: String.raw`C:\Users\Dell\.grok\sessions\C%3A%5CUsers%5CDell%5CAppData%5CLocal%5CTemp%5Cgrok-winmedia-lOd7PM\019ea7f4-3495-77b1-84f5-177e4ff37e1c\images\1.jpg` },
+      ]);
+    });
+
+    it("extracts a video path from the prose result and strips the \\\\?\\ prefix", () => {
+      const prose = String.raw`Video generated and saved to \\?\C:\Users\Dell\.grok\sessions\C%3A%5CUsers%5CDell%5CAppData%5CLocal%5CTemp%5Cgrok-winvideo-MMJ6F4\019ea7f4-4310-7832-a0b3-dab499e569d2\videos\1.mp4.`;
+      expect(extractGeneratedMediaPaths(completedWithText(prose))).toEqual([
+        { media: "video", kind: "path", path: String.raw`C:\Users\Dell\.grok\sessions\C%3A%5CUsers%5CDell%5CAppData%5CLocal%5CTemp%5Cgrok-winvideo-MMJ6F4\019ea7f4-4310-7832-a0b3-dab499e569d2\videos\1.mp4` },
+      ]);
+    });
+
+    it("does not swallow the sentence's trailing period into the path", () => {
+      const prose = String.raw`Image generated and saved to \\?\C:\out\images\1.jpg.`;
+      const [ref] = extractGeneratedMediaPaths(completedWithText(prose));
+      expect(ref.kind === "path" && ref.path).toBe(String.raw`C:\out\images\1.jpg`);
+    });
+
+    it("ignores prose that mentions no media file", () => {
+      expect(extractGeneratedMediaPaths(completedWithText("Image generation failed: quota exceeded."))).toEqual([]);
+      expect(extractGeneratedMediaPaths(completedWithText(String.raw`Saved a log to \\?\C:\out\run.txt.`))).toEqual([]);
+    });
   });
 });

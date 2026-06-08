@@ -107,19 +107,26 @@
     return { answers, allAnswered };
   }
 
-  // Recognize a tool call that spawns a subagent, so the webview can give it a
+  // Recognize a tool call that *spawns* a subagent, so the webview can give it a
   // distinct labeled card instead of burying it in the generic tool group.
-  // grok's parallel subagents are a flagship feature but arrive over ACP as
-  // ordinary tool calls. The tool is `spawn_subagent` with a `subagent_type`
-  // parameter (general-purpose | explore | plan | custom) — confirmed against
-  // grok 0.2.33's bundled docs, see research/subagents.md. The extra name/shape
-  // fallbacks keep it robust to relabelled titles and future renames; it
-  // degrades gracefully (no match → today's behavior).
+  // grok's bundled docs describe a `spawn_subagent` tool with a `subagent_type`
+  // parameter (general-purpose | explore | plan | custom), and we match that
+  // shape (forward-compat; some builds may emit it). BUT the native-Windows
+  // grok 0.2.x build does NOT actually emit `spawn_subagent` over ACP — it
+  // delegates via a *background* `run_terminal_command` (`is_background:true`)
+  // and then reads its output with `get_command_or_subagent_output`. That output
+  // READER is not a delegation, yet its name contains the substring "subagent",
+  // so it must be explicitly excluded or it false-fires a card on the poller.
+  // See research/subagents.md for the wire capture. Degrades gracefully (no
+  // match → the call stays in the generic tool group).
   function isSubagentToolCall(call) {
     if (!call) return false;
     if (call.kind === "subagent" || call.kind === "agent") return true;
     const n = String(call.tool || call.name || call.title || "")
       .replace(/[_\s-]/g, "").toLowerCase();
+    // grok's `get_command_or_subagent_output` polls a background task's output —
+    // its name carries "subagent" but it is NOT a delegation, so never card it.
+    if (/output$/.test(n) || n.startsWith("getcommand")) return false;
     if (/subagent|spawnagent|launchagent|dispatchagent|runagent|delegat/.test(n)) return true;
     if (n === "task" || n === "agent" || n === "agents") return true;
     const r = call.rawInput || call.input || {};
