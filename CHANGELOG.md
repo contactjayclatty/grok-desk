@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.4 — 2026-06-14
+
+> You can read history again while Grok is thinking.
+
+### Fixes
+
+- **Scrolling up no longer gets yanked back down while Grok is thinking** ([#16](https://github.com/phuryn/grok-build-vscode/issues/16)). The chat snapped to the bottom on *every* streaming update, so any attempt to scroll up and re-read earlier messages (or Grok's own earlier reasoning) was undone on the very next thought chunk. The view now follows streaming output only while you're already pinned to the bottom; the moment you scroll up to read history, auto-scroll pauses and leaves you there. Genuinely interactive activity you need to see — **permission cards**, **ask-user-question cards**, and **your own sent message** — still pulls the view back down and re-pins. This also restores the ability to keep an eye on reasoning while permission cards stack up ([#15](https://github.com/phuryn/grok-build-vscode/issues/15)). ([media/chat.js](media/chat.js), [media/webview-helpers.js](media/webview-helpers.js))
+
 ## 1.4.3 — 2026-06-09
 
 > Docs catch-up and a faster, leaner session start.
