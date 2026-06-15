@@ -75,6 +75,11 @@
     thoughtRenderScheduled: false,
     sessions: [],
     activeSessionId: null,
+    // Dashboard dot per grok-session id (id → "working"|"needs-you"|"unread"|
+    // "error"|"none"). The host computes the value (live status + persisted unread
+    // badge); the webview just paints it. Sent in full on each `sessions` message
+    // and patched incrementally by `sessionDot`.
+    dots: {},
     sessionSearch: "",
     renamingSessionId: null,
     replaying: false,
@@ -100,6 +105,15 @@
     // the verdict click and the first incoming agent chunk; cleared by any
     // arriving content or by reset.
     planProcessingEl: null,
+    // The "Grokking…" placeholder shown while a user-initiated turn is waiting on
+    // grok — from the moment the user sends (agentStart) until the first real
+    // content arrives (a thought, message, tool card, …), which replaces it in
+    // place. Same font + animated dots as the Thinking header, minus the expand
+    // chevron. Covers the held-behind-primer gap too: the message shows as sent,
+    // this spins, then the real Thinking block takes over. Never shown for the
+    // silent primer turn (which emits no agentStart). One at a time with
+    // planProcessing (each hides the other).
+    grokkingEl: null,
     // When true, the busy state is "locked" (e.g. session-start priming): the
     // send button shows a spinner and is disabled. When false, busy is
     // "stoppable" (regular prompts, verdict afterTurn) and the send button
@@ -1101,6 +1115,29 @@
     addPopover.hidden = false;
   }
 
+  // Dashboard dot in the history dropdown. Gray (the `none` default) at rest; the
+  // labels double as the dot's tooltip (none → no tooltip).
+  const DOT_LABEL = {
+    working: "Working",
+    "needs-you": "Needs you",
+    unread: "Finished — unopened",
+    error: "Finished with an error — unopened",
+  };
+
+  function applySessionDot(dot, value) {
+    const v = DOT_LABEL[value] ? value : "none";
+    dot.className = "history-row-dot dot-" + v;
+    dot.title = DOT_LABEL[value] || "";
+  }
+
+  // Cheap incremental update for a single dot when a `sessionDot` arrives while the
+  // popover is open — no full re-render.
+  function patchSessionDot(id) {
+    const sel = "[data-session-dot=\"" + (window.CSS && CSS.escape ? CSS.escape(id) : id) + "\"]";
+    const dot = historyPopover.querySelector(sel);
+    if (dot) applySessionDot(dot, state.dots[id]);
+  }
+
   function renderHistoryList() {
     historyPopover.innerHTML = "";
 
@@ -1147,6 +1184,11 @@
       const row = document.createElement("div");
       const active = s.id === state.activeSessionId;
       row.className = "history-row" + (active ? " active" : "");
+
+      const dot = document.createElement("span");
+      dot.setAttribute("data-session-dot", s.id);
+      applySessionDot(dot, state.dots[s.id]);
+      row.appendChild(dot);
 
       const main = document.createElement("div");
       main.className = "history-row-main";
@@ -1284,6 +1326,7 @@
     state.skipUserBubble = false;
     state.stickToBottom = true; // a fresh/loaded session starts pinned
     hidePlanProcessing();
+    hideGrokking();
   }
 
   function showOnboarding(mode, info) {
@@ -1529,6 +1572,7 @@
 
   function addToToolGroup(call) {
     clearWelcome();
+    hideGrokking(); // a tool card is the first content of this turn
     if (!state.activeToolGroupEl) {
       const el = document.createElement("div");
       el.className = "tool-group in-progress";
@@ -1660,6 +1704,7 @@
     const isVideo = msg.media === "video";
     closeToolGroup();
     clearWelcome();
+    hideGrokking();
     const el = document.createElement("div");
     el.className = "generated-image" + (isVideo ? " generated-video" : "");
     if (msg.src) {
@@ -1701,6 +1746,7 @@
   function addSubagentCard(call) {
     closeToolGroup();
     clearWelcome();
+    hideGrokking();
     const el = document.createElement("div");
     el.className = "subagent-card";
     const label = escapeHtml(subagentLabel(call));
@@ -1713,6 +1759,7 @@
 
   function addPlanNotice(text) {
     clearWelcome();
+    hideGrokking();
     const el = document.createElement("div");
     el.className = "plan-notice";
     el.innerHTML = `${ICON.listTree}<span>${escapeHtml(text)}</span>`;
@@ -1723,6 +1770,7 @@
   function appendThought(text) {
     if (state.suppressReplayTurn) return; // thinking inside the primer turn
     hidePlanProcessing(); // thought streaming → indicator obsolete
+    hideGrokking(); // real content arrived — the Thinking block takes over
     state.activeUserEl = null;
     state.skipUserBubble = false; // marker-only verdict turn is over
     clearWelcome();
@@ -1765,6 +1813,7 @@
   function appendAgent(text) {
     if (state.suppressReplayTurn) return; // grok's response to the primer
     hidePlanProcessing(); // agent output started — clear the indicator
+    hideGrokking(); // real content arrived — the message bubble takes over
     state.activeUserEl = null;
     state.skipUserBubble = false; // marker-only verdict turn is over
     closeToolGroup();
@@ -1891,6 +1940,7 @@
 
   function showPlanProcessing() {
     hidePlanProcessing(); // dedupe
+    hideGrokking(); // one waiting indicator at a time
     clearWelcome();
     const el = document.createElement("div");
     el.className = "plan-processing";
@@ -1906,6 +1956,31 @@
       state.planProcessingEl.parentElement.removeChild(state.planProcessingEl);
     }
     state.planProcessingEl = null;
+  }
+
+  // "Grokking…" — the generic waiting indicator shown on every user-initiated
+  // turn from agentStart until grok produces its first content (thought /
+  // message / tool / card), which removes it and renders in its place. Mirrors
+  // the Thinking header's look (loading-dots ellipsis, same muted font) without
+  // the chevron, and is not expandable. Mutually exclusive with planProcessing.
+  function showGrokking() {
+    hideGrokking(); // dedupe
+    hidePlanProcessing(); // one waiting indicator at a time
+    clearWelcome();
+    const el = document.createElement("div");
+    el.className = "grokking";
+    el.innerHTML = '<span class="grokking-label loading-dots">Grokking</span>';
+    el.setAttribute("aria-label", "Grok is working");
+    messagesEl.appendChild(el);
+    state.grokkingEl = el;
+    scrollToBottom();
+  }
+
+  function hideGrokking() {
+    if (state.grokkingEl && state.grokkingEl.parentElement) {
+      state.grokkingEl.parentElement.removeChild(state.grokkingEl);
+    }
+    state.grokkingEl = null;
   }
 
   // Follow streaming output only while the user is pinned to the bottom. Once
@@ -1932,6 +2007,7 @@
 
   function addPermissionCard(req) {
     clearWelcome();
+    hideGrokking();
     const el = document.createElement("div");
     el.className = "card permission";
     const title = document.createElement("div");
@@ -2017,6 +2093,7 @@
   // (the bare grey-out gave no such signal).
   function addQuestionCard(req) {
     clearWelcome();
+    hideGrokking();
     const questions = Array.isArray(req.questions) ? req.questions : [];
     const el = document.createElement("div");
     el.className = "card question";
@@ -2276,6 +2353,7 @@
 
   function addPlanCard(req) {
     clearWelcome();
+    hideGrokking();
     // Finalize any in-flight Thinking / agent / tool group so it doesn't sit
     // above the plan card showing "Thinking..." forever. Stamps "Thought for Ns"
     // on the header and closes the tool group.
@@ -2777,6 +2855,10 @@
         hidePlanProcessing();
         break;
       case "agentStart":
+        // A user-initiated turn just began (live send, or a plan-verdict
+        // follow-up). Show "Grokking…" until the first real content replaces it.
+        // The silent primer never emits agentStart, so it never shows here.
+        showGrokking();
         break;
       case "thoughtChunk":
         appendThought(msg.text);
@@ -2912,6 +2994,7 @@
         break;
       case "agentReset": {
         hidePlanProcessing(); // turn is being reset, indicator no longer applies
+        hideGrokking();
         // Drop the in-flight agent bubble entirely. Used when the host wants to
         // suppress the rest of the current turn (e.g. after Reject, where
         // grok's false "approved" response would otherwise leak through).
@@ -2931,17 +3014,20 @@
         break;
       }
       case "agentError":
+        hideGrokking(); // turn ended (possibly before any content)
         addError(msg.text);
         state.busy = false;
         updateSendButton();
         flushVoiceQueue(); // don't strand messages dictated during this turn
         break;
       case "agentEnd":
+        hideGrokking(); // turn ended (defensive — content normally clears it first)
         state.busy = false;
         updateSendButton();
         flushVoiceQueue(); // send anything dictated while Grok was responding
         break;
       case "exit":
+        hideGrokking();
         addError(`Grok exited (code ${msg.code}). Click the new session button to restart.`);
         state.busy = false;
         state.voiceQueue = []; // session is dead — drop anything queued for it
@@ -3003,7 +3089,13 @@
       case "sessions":
         state.sessions = msg.entries || [];
         state.activeSessionId = msg.activeId || null;
+        state.dots = msg.dots || {};
         if (!historyPopover.hidden) renderHistoryList();
+        break;
+      case "sessionDot":
+        if (msg.dot && msg.dot !== "none") state.dots[msg.id] = msg.dot;
+        else delete state.dots[msg.id];
+        if (!historyPopover.hidden) patchSessionDot(msg.id);
         break;
     }
   });

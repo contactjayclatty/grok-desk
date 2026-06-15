@@ -1,7 +1,9 @@
 # Install the Grok VS Code extension on Windows.
-# Usage:  pwsh scripts\install.ps1
-# Picks the first .vsix in the repo root, or builds one if none exists.
-# Tries `code`, then `code-insiders`, then the well-known install path.
+# Usage:  pwsh scripts\install.ps1 [-VsixPath path\to.vsix]
+# Always builds a FRESH .vsix from the current source (npm run package clears the
+# stale one first) unless an explicit -VsixPath is given — so an install never
+# silently ships a leftover build. Tries `code`, then `code-insiders`, then the
+# well-known install path, and uses --force so a same-version reinstall overwrites.
 
 param(
     [string]$VsixPath
@@ -23,22 +25,19 @@ function Find-CodeCli {
 }
 
 if (-not $VsixPath) {
-    $vsix = Get-ChildItem -Path $repoRoot -Filter "*.vsix" | Select-Object -First 1
-    if (-not $vsix) {
-        Write-Host "No .vsix found - building one..."
-        Push-Location $repoRoot
-        try {
-            if (-not (Test-Path "node_modules")) { npm install }
-            npm run package
-            $vsix = Get-ChildItem -Path $repoRoot -Filter "*.vsix" | Select-Object -First 1
-        } finally { Pop-Location }
-    }
+    Write-Host "Building a fresh .vsix from current source..."
+    Push-Location $repoRoot
+    try {
+        if (-not (Test-Path "node_modules")) { npm install }
+        npm run package   # clears stale grok-vscode-phuryn-*.vsix first, then builds
+        $vsix = Get-ChildItem -Path $repoRoot -Filter "*.vsix" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    } finally { Pop-Location }
     if (-not $vsix) { throw "Build did not produce a .vsix." }
     $VsixPath = $vsix.FullName
 }
 
 $code = Find-CodeCli
 Write-Host "Installing $VsixPath via $code"
-& $code --install-extension $VsixPath
+& $code --install-extension $VsixPath --force
 Write-Host ""
 Write-Host "Done. Reload VS Code (Ctrl+Shift+P -> 'Developer: Reload Window') and click the Grok icon."

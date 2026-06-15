@@ -337,6 +337,19 @@ code {
   word-wrap: break-word;
 }
 
+/* "Grokking…" — the generic waiting placeholder. Matches the Thinking header's
+   muted font + animated loading-dots, but without the expand chevron (it carries
+   no body) and is not interactive. Replaced in place by real content. */
+.grokking {
+  display: inline-flex;
+  align-items: center;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  padding: 3px 10px;
+  margin: 2px 0;
+  user-select: none;
+}
+
 /* ---- file chips in user message history ---- */
 
 .msg-chips {
@@ -1447,6 +1460,20 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 }
 .history-row:hover { background: var(--vscode-list-hoverBackground); }
 .history-row.active { background: var(--vscode-list-activeSelectionBackground); }
+.history-row-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  /* Gray "at rest" is the default — idle, already-read, cold, and loaded-from-disk
+     all look the same; only the states worth knowing about light up. */
+  background: var(--vscode-descriptionForeground);
+}
+.history-row-dot.dot-none { background: var(--vscode-descriptionForeground); }
+.history-row-dot.dot-working { background: var(--vscode-charts-blue); }
+.history-row-dot.dot-needs-you { background: var(--vscode-charts-yellow); }
+.history-row-dot.dot-unread { background: var(--vscode-charts-green); }
+.history-row-dot.dot-error { background: var(--vscode-errorForeground); }
 .history-row-main { flex: 1; min-width: 0; }
 .history-row-name {
   font-size: 13px;

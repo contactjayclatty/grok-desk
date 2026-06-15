@@ -52,8 +52,77 @@ When the panel opens (or you click **+** for a new session):
    permission requests, mode changes) back into the chat.
 
 The composer unlocks as soon as the session is live. The extension's hidden
-"primer" message (below) is **not** sent at startup — it rides along with your
-first real prompt, so there's no startup round-trip to wait on.
+"primer" message (below) fires **eagerly and silently** the moment the session
+goes live — in the background, without blocking the composer — so it's almost
+always finished before you send. Your first real prompt simply `await`s the same
+in-flight primer turn (grok runs one turn at a time) and is released the instant
+it acks. While any user turn is waiting on grok — including that brief held-behind-
+primer gap — the chat shows an animated **Grokking…** placeholder, replaced in
+place by the first thought / message / tool card.
+
+## The session pool (Agent Dashboard)
+
+The sidebar shows one conversation at a time, but it keeps a **pool of live
+sessions** behind it — one spawned `grok agent stdio` process each, with exactly
+one *focused* (the one you see). All the per-session state lives in a
+[`Session`](../src/session.ts) object; the sidebar holds `focused` plus a `Set` of
+every live `Session` (`pool`). The point is **lossless re-focus**: a backgrounded
+session keeps streaming into its own *view buffer* (every webview post that built
+its chat, in order), so re-focusing it is a `clearMessages` + replay of that
+buffer — no grok reload, no process kill, even mid-turn or mid-approval.
+
+Switching focus (`focusSession`) never touches grok: it swaps `this.focused`,
+replays the target's buffer to the webview, and re-pushes the mode/sessions UI.
+Clicking a session that *isn't* live (cold — it was reaped, or predates this
+window) loads it from grok's on-disk history into a fresh pool member instead
+(`openSession`).
+
+Two details make the pool safe:
+
+- **Per-session generation guard.** Each `Session` owns a `gen` counter, bumped
+  only when *its* client is torn down. Handlers capture their session's `gen` when
+  wired, so a backgrounded session's in-flight events are never judged "stale" just
+  because focus moved elsewhere (the old global counter would have done exactly
+  that).
+- **Session-scoped emit.** `emit(session, …)` buffers to that session and only
+  forwards to the webview when it's the focused one; `post(…)` is for UI-wide
+  messages (status dots, the sessions list) that aren't tied to one chat.
+
+**Status dots.** Every row in the history dropdown shows a dot. It's **gray** at
+rest — and "at rest" is deliberately one bucket: idle, already-read, cold, or
+loaded-from-disk all look the same, because the warm-process-vs-cold distinction is
+an implementation detail no user should have to reason about. It lights up only
+when there's something to know: **blue** working, **yellow** needs-you (a pending
+permission / question / plan review), **green** *finished with output you haven't
+opened yet*, **red** *finished with an error you haven't opened*.
+
+The green/red dot is an **unread badge**, not a live state. When a session's turn
+ends while you're looking at a *different* session, a persisted `unread` flag is set
+(in the same `globalState` session-meta that holds rename overrides); opening that
+session clears it. Because the flag lives in metadata rather than the live process,
+the badge **survives both the idle reaping below and a full VS Code restart** — so
+you can fire off several agents, walk away, and come back to find the green dots are
+exactly the sessions with results waiting. There's no timer: a session you never
+open stays green, because it genuinely *is* still unread. The actual color is a pure
+function ([`computeDot`](../src/session-pool.ts)) of `(live status, unread,
+unreadError)`, so the policy is unit-tested without a process pool. The host pushes
+one changed dot at a time (cheap, no disk read) and the full map on each list
+refresh.
+
+**Reaping** ([src/session-pool.ts](../src/session-pool.ts)). A live process per
+session isn't free, so the pool is bounded — silently. The pure `selectReapable`
+picks victims under two rules: an **idle TTL** (a session untouched for an hour is
+torn down, swept every 5 min) and an **LRU cap** (at most ~8 live; the
+least-recently-used eligible sessions are evicted past it). It **never** reaps the
+focused session or a `working`/`needs-you` one — so the cap can be exceeded when
+everything spare is busy, by design. Reaping just kills the process and recomputes
+the dot — a reaped session that's still unread **stays green**, a read one goes
+gray — and re-clicking the row reloads the session from disk.
+
+One safety valve sits next to this: the explicit **Update Grok Build CLI** action
+tears down every live session to swap the binary, so it now confirms first if any
+session is `working` or `needs-you` (the silent startup auto-update runs before
+anything is in flight, so it doesn't ask).
 
 ## Plan Mode — the one part that isn't thin
 
@@ -76,15 +145,26 @@ the extension can't trust the wire verdict. Two mechanisms cover the gap:
   the real decision from the **next** user message instead, as a bracketed
   marker: `[Plan approved]` / `[Plan rejected]` / `[Plan cancelled]` (optionally
   followed by a free-form comment). Approve → drop the gate + send "implement it
-  now"; Keep planning → the gate stays up. The primer is sent **lazily** —
-  prepended as its own hidden turn right before the first real prompt, on both
-  new **and** restored sessions. It is *re-sent* on the first send after a
-  restore: a primer buried in replayed history isn't reliably honored (a
-  `/compact` can drop it from effective context), so the extension re-asserts it
-  rather than trusting the replay. When grok replays an earlier primer as a user
-  message on restore, the pure `isPrimerText()` helper detects it so the bubble
-  is hidden and not counted toward plan positions — but that detection does
-  **not** mark the session primed.
+  now"; Keep planning → the gate stays up. The primer fires **eagerly and
+  non-blocking** (`ensurePrimed`) — its own hidden turn, kicked off the moment a
+  session goes live (new **and** restored, and after `/compact`) rather than in
+  front of the user's first prompt. It returns a reused `session.primingPromise`,
+  so a first send that races the background primer awaits the *same* turn and is
+  released when it acks. It is *re-sent* on go-live after a restore: a primer
+  buried in replayed history isn't reliably honored (a `/compact` can drop it from
+  effective context), so the extension re-asserts it rather than trusting the
+  replay. The silent turn is hidden by a session-level `suppressContent` flag,
+  which deliberately lets `userMessage`/`agentStart` through so a racing user send
+  still paints its own bubble + Grokking indicator. **Primer v4** is kept minimal
+  on purpose: grok-build is agentic, and the old v3 primer's product-blurb
+  paragraph + repo URL + "acknowledge briefly" line were tempting grok into a
+  15–40s pre-turn exploration of the workspace before the user's message even ran
+  — so v4 keeps only the plan protocol and adds an explicit *do not use tools /
+  read files / search the workspace / take any action; reply with just `ok`*
+  constraint. When grok replays an earlier primer as a user message on restore,
+  the pure `isPrimerText()` helper detects it so the bubble is hidden and not
+  counted toward plan positions — but that detection does **not** mark the session
+  primed.
 
 The full pedagogical write-up lives in
 [research/understanding-plan-mode.md](../research/understanding-plan-mode.md).
@@ -96,6 +176,8 @@ The full pedagogical write-up lives in
 | [src/extension.ts](../src/extension.ts) | Entry point — registers commands, keybindings, output channel |
 | [src/sidebar.ts](../src/sidebar.ts) | Webview provider, message routing, fs handlers, diff preview, logout, generated-media serving (`postGeneratedMedia` → `asWebviewUri`, base64 fallback) |
 | [src/acp.ts](../src/acp.ts) | ACP client — spawns CLI, manages session lifecycle, emits events |
+| [src/session.ts](../src/session.ts) | Per-session state bag — one `Session` per live `grok agent stdio` process (the sidebar holds a *pool* of these + one focused) |
+| [src/session-pool.ts](../src/session-pool.ts) | Pure reaping policy (`selectReapable`) — idle-TTL + LRU cap over the live-session pool |
 | [src/acp-dispatch.ts](../src/acp-dispatch.ts) | Pure protocol helpers — line parsing, update routing, response + generated-media extraction (`isMediaGenToolCall`/`extractGeneratedMediaPaths`) |
 | [src/cli-locator.ts](../src/cli-locator.ts) | Locate the `grok` binary; cross-platform |
 | [src/terminal-manager.ts](../src/terminal-manager.ts) | Headless shells for the agent's `terminal/*` calls |

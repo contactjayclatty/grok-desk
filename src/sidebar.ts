@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AcpClient, EffortLevel, ExitPlanRequest, PermissionRequest, QuestionRequest } from "./acp";
+import { Session, SessionStatus } from "./session";
+import { selectReapable, computeDot, Dot } from "./session-pool";
 import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice";
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
@@ -109,7 +111,27 @@ function guessMediaMime(p: string): string {
 export class GrokSidebar implements vscode.WebviewViewProvider {
   public static readonly viewId = "grok.chat";
   private view?: vscode.WebviewView;
-  private client?: AcpClient;
+  /** The session currently shown in the chat — one member of {@link pool}. */
+  private focused = new Session();
+  /**
+   * Every live session (each a spawned `grok agent stdio` process), including the
+   * focused one. Backgrounded members keep streaming into their own buffers, so
+   * re-focusing one replays its buffer losslessly — no kill, no reload. A session
+   * is added on its first successful start and removed when its client is disposed
+   * (switch-away of an empty one, delete, logout, reap, teardown).
+   */
+  private pool = new Set<Session>();
+  /**
+   * Bounds on the live-session pool (see session-pool.ts). A backgrounded session
+   * idle past {@link IDLE_TTL_MS}, or beyond the {@link MAX_LIVE_SESSIONS} LRU cap,
+   * is silently reaped (its process killed, its dot going cold) — re-focusing it
+   * reloads from grok's on-disk history. Working/needs-you and the focused session
+   * are never reaped.
+   */
+  private static readonly MAX_LIVE_SESSIONS = 8;
+  private static readonly IDLE_TTL_MS = 60 * 60 * 1000; // 1h
+  private static readonly REAP_INTERVAL_MS = 5 * 60 * 1000; // sweep every 5 min
+  private reaper?: ReturnType<typeof setInterval>;
   private output: vscode.OutputChannel;
   private chips: FileChip[] = [];
   private editorWatcher?: vscode.Disposable;
@@ -122,56 +144,9 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   // message = one clean utterance) without re-resolving the mic device.
   private voiceStreamCtx?: { key: string; ffmpegPath: string; device?: string; phrase: string; keyterms: string[] };
   private configWatcher?: vscode.Disposable;
-  private autoApprove = false;
-  private planActive = false;
-  // Deferred post-turn action. The CLI's exit_plan_mode arrives *during* an
-  // in-flight session/prompt, so we can't send a new prompt/set_mode from the
-  // approval handler — we'd collide with the running turn. We stash the action
-  // here and run it once the current prompt resolves (see handleSend).
-  private afterTurn?: () => Promise<void>;
   private cliPath?: string;
   // Guards the silent grok-CLI auto-update so it runs at most once per activation.
   private cliUpdateChecked = false;
-  private sessionGen = 0;
-  private hasHistory = false;
-  // True for the whole session-start window (spawn → newSession/load → primer).
-  // Model/effort changes are settings that restart or race the session, so they
-  // are ignored while priming — the webview also disables the controls (busy),
-  // this is the host-side backstop for a click that slips through that window.
-  private priming = false;
-  // False until the hidden primer has been sent on THIS session load. The primer
-  // is no longer sent at session start — it's deferred to the first outbound
-  // prompt (ensurePrimed), so a startup or glance-only restore costs nothing.
-  // It's (re-)sent on the first send of every load, new OR restored: a primer
-  // buried in a restored session's replayed history isn't reliably honored by
-  // grok (a /compact can drop it from effective context), so we re-assert it
-  // once before the first post-restore turn rather than trusting history.
-  private primed = false;
-  private suppressContent = false;
-  // Plan-reject specific suppression: drop streaming output (the false-approval
-  // ramble) but let lifecycle events through so the webview clears `busy` and
-  // re-enables the send button when the cancelled turn finally ends.
-  private suppressPlanReject = false;
-  private lastPlanText = "";
-  // Plan text currently shown in the live exit_plan_mode card. Set when we post
-  // the card to the webview, read by persistPlanVerdict when the user picks a
-  // verdict, then cleared. Decoupled from lastPlanText (which gets nuked the
-  // moment we render the card) so the saved history actually has content.
-  private pendingPlanText = "";
-  // Count of user messages that have entered this session (replayed + live).
-  // Persisted on each resolved plan as `afterUserMessage` so the resume view
-  // can render plan cards inline with the conversation rather than at the end.
-  private userMessageCount = 0;
-  // True while a sequence of user_message_chunk events is mid-flight, so we
-  // only increment userMessageCount once per user message during replay.
-  private inUserMessage = false;
-  // True only while replaying a resumed session (session/load). grok ≥0.2.33
-  // echoes the *live* prompt back as user_message_chunk too, so this gates the
-  // handler to replay-only — the live bubble already comes from send().
-  private replaying = false;
-  private activeSessionId?: string;
-  private titleGenerated = false;
-  private firstUserMessageForTitle?: string;
 
   constructor(
     private context: vscode.ExtensionContext,
@@ -196,6 +171,11 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     view.webview.html = this.getHtml(view.webview);
     view.webview.onDidReceiveMessage((m: WebviewMsg) => this.onMessage(m));
     this.watchActiveEditor();
+    // Periodic idle-TTL sweep over the live-session pool (the LRU cap is enforced
+    // eagerly on each new start; this catches sessions that simply went stale).
+    if (!this.reaper) {
+      this.reaper = setInterval(() => this.reapPool(), GrokSidebar.REAP_INTERVAL_MS);
+    }
     // Re-tell the webview whether voice is set up when the relevant settings
     // change, so the mic button's "needs setup" hint updates without a reload.
     this.configWatcher?.dispose();
@@ -227,17 +207,17 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
   }
 
   newSession(): void {
-    void this.startSession();
+    void this.newFocusedSession();
   }
 
   async pickModel(): Promise<void> {
-    if (!this.client || !this.client.availableModels.length) {
+    if (!this.focused.client || !this.focused.client.availableModels.length) {
       vscode.window.showInformationMessage("Start a session first.");
       return;
     }
-    const items = this.client.availableModels.map((m) => ({
+    const items = this.focused.client.availableModels.map((m) => ({
       label: m.name ?? m.modelId,
-      description: m.modelId === this.client!.currentModelId ? "$(check) current" : "",
+      description: m.modelId === this.focused.client!.currentModelId ? "$(check) current" : "",
       detail: m.description,
       modelId: m.modelId,
     }));
@@ -256,13 +236,13 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
    * is still rebindable. Same-agent switches stay live (history intact).
    */
   async switchModel(modelId: string): Promise<void> {
-    const client = this.client;
+    const client = this.focused.client;
     // Ignore switches fired during the session-start window: the live set_model
     // would race the hidden primer (sometimes landing before the agent locks,
     // sometimes after — see research/model-switch-race-probe.cjs), making the
     // outcome unpredictable. The webview disables the control while busy; this
     // is the backstop for a click already in flight.
-    if (!client || this.priming || modelId === client.currentModelId) return;
+    if (!client || this.focused.priming || modelId === client.currentModelId) return;
     const cfg = vscode.workspace.getConfiguration("grok");
     try {
       await client.setModel(modelId);
@@ -272,7 +252,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
         vscode.window.showErrorMessage(`Failed to set model: ${(e as Error).message}`);
         return;
       }
-      if (!this.hasHistory) {
+      if (!this.focused.hasHistory) {
         await cfg.update("defaultModel", modelId, vscode.ConfigurationTarget.Global);
         await this.startSession();
         return;
@@ -326,7 +306,7 @@ See design doc for the full state machine diagram.`;
       type: "exitPlanRequest",
       req: {
         id: "dummy-plan-" + Date.now(),
-        sessionId: this.activeSessionId || "dummy-session",
+        sessionId: this.focused.activeSessionId || "dummy-session",
         plan: dummyPlan,
       },
     });
@@ -341,8 +321,8 @@ See design doc for the full state machine diagram.`;
    * here rather than echoing the CLI's raw mode id.
    */
   private displayMode(): "agent" | "plan" | "yolo" {
-    if (this.planActive) return "plan";
-    if (this.autoApprove) return "yolo";
+    if (this.focused.planActive) return "plan";
+    if (this.focused.autoApprove) return "yolo";
     return "agent";
   }
 
@@ -350,38 +330,42 @@ See design doc for the full state machine diagram.`;
     this.post({ type: "modeChanged", modeId: this.displayMode() });
   }
 
-  /** Toggle the client-enforced plan gate and keep the live client in sync. */
-  private setPlanActive(v: boolean): void {
-    this.planActive = v;
-    if (this.client) this.client.planActive = v;
-    this.postMode();
+  /** Toggle the client-enforced plan gate and keep the live client in sync. Only
+   *  the focused session drives the mode button — a background session entering
+   *  plan mode raises its own gate silently. */
+  private setPlanActive(session: Session, v: boolean): void {
+    session.planActive = v;
+    if (session.client) session.client.planActive = v;
+    if (session === this.focused) this.postMode();
   }
 
   async setMode(modeId: "agent" | "plan" | "yolo"): Promise<void> {
     // Agent/plan/yolo are mutually exclusive. Plan = client write/exec gate;
     // YOLO = auto-approve. Both ride on top of the CLI's agent mode, except
-    // Plan which also tells the CLI to plan instead of act.
+    // Plan which also tells the CLI to plan instead of act. The mode button only
+    // ever drives the focused session.
+    const session = this.focused;
     if (modeId === "yolo") {
-      this.autoApprove = true;
-      this.setPlanActive(false); // posts displayMode → "yolo"
-      if (this.client) {
-        try { await this.client.setMode(ACT_MODE_ID); } catch { /* CLI stays put; gate is what matters */ }
+      session.autoApprove = true;
+      this.setPlanActive(session, false); // posts displayMode → "yolo"
+      if (session.client) {
+        try { await session.client.setMode(ACT_MODE_ID); } catch { /* CLI stays put; gate is what matters */ }
       }
       return;
     }
-    this.autoApprove = false;
+    session.autoApprove = false;
     if (modeId === "plan") {
-      this.setPlanActive(true); // posts displayMode → "plan"
-      if (this.client) {
-        try { await this.client.setMode("plan"); }
+      this.setPlanActive(session, true); // posts displayMode → "plan"
+      if (session.client) {
+        try { await session.client.setMode("plan"); }
         catch (e) { vscode.window.showErrorMessage(`Couldn't switch mode: ${(e as Error).message}`); }
       }
       return;
     }
     // agent
-    this.setPlanActive(false); // posts displayMode → "agent"
-    if (this.client) {
-      try { await this.client.setMode(ACT_MODE_ID); }
+    this.setPlanActive(session, false); // posts displayMode → "agent"
+    if (session.client) {
+      try { await session.client.setMode(ACT_MODE_ID); }
       catch (e) { vscode.window.showErrorMessage(`Couldn't switch mode: ${(e as Error).message}`); }
     }
   }
@@ -412,11 +396,13 @@ See design doc for the full state machine diagram.`;
     verdict: "approved" | "abandoned" | "rejected",
     comment?: string,
   ): void {
-    const client = this.client;
+    const session = this.focused;
+    const client = session.client;
     if (!client) return;
-    const gen = this.sessionGen;
+    const gen = session.gen;
     client.respondExitPlan(requestId, verdict);
-    this.persistPlanVerdict(verdict);
+    this.persistPlanVerdict(session, verdict);
+    this.setStatus(session, "working"); // a verdict always triggers a follow-up turn
 
     const feedback = comment?.trim();
 
@@ -427,26 +413,29 @@ See design doc for the full state machine diagram.`;
       // three verdicts speak a consistent protocol. If the user attached a
       // comment, post it as their user bubble immediately and append it to the
       // wire-level prompt — same pattern as reject/cancel.
-      this.setPlanActive(false);
+      this.setPlanActive(session, false);
       if (feedback) {
-        this.userMessageCount += 1;
-        this.post({ type: "userMessage", text: feedback, chips: [] });
+        session.userMessageCount += 1;
+        this.emit(session, { type: "userMessage", text: feedback, chips: [] });
       }
-      this.post({ type: "planProcessing" }); // indicator while we wait for grok
+      this.emit(session, { type: "planProcessing" }); // indicator while we wait for grok
       const promptToGrok = feedback ? `[Plan approved] ${feedback}` : "[Plan approved]";
-      this.afterTurn = async () => {
+      session.afterTurn = async () => {
         try { await client.setMode(ACT_MODE_ID); } catch { /* CLI usually auto-exits already */ }
-        this.post({ type: "agentStart" });
+        this.emit(session, { type: "agentStart" });
+        this.setStatus(session, "working");
         try {
-          await this.ensurePrimed(client, gen);
-          if (gen !== this.sessionGen) return;
+          await this.ensurePrimed(client, session, gen);
+          if (gen !== session.gen) return;
           const meta = await client.prompt(promptToGrok);
-          if (gen !== this.sessionGen) return;
-          this.post({ type: "agentEnd", meta });
+          if (gen !== session.gen) return;
+          this.emit(session, { type: "agentEnd", meta });
+          this.setStatus(session, "done");
         } catch (err) {
-          if (gen !== this.sessionGen) return;
+          if (gen !== session.gen) return;
           const e = err as any;
-          this.post({ type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+          this.emit(session, { type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+          this.setStatus(session, "error");
         }
       };
       return;
@@ -455,17 +444,17 @@ See design doc for the full state machine diagram.`;
     // rejected / abandoned: cancel the in-flight turn and suppress its content
     // so the false-approval response doesn't reach the screen.
     void client.cancel();
-    this.post({ type: "agentReset" });
-    this.suppressPlanReject = true;
+    this.emit(session, { type: "agentReset" });
+    session.suppressPlanReject = true;
 
     // If the user attached a comment, post it as their user bubble IMMEDIATELY
     // (not deferred to afterTurn) so it lands in the conversation right after
     // the verdict click. Same text gets sent to grok later, verbatim — what the
     // user sees IS what grok receives, no wire-level boilerplate prefix.
     if (feedback) {
-      this.userMessageCount += 1;
-      this.post({ type: "userMessage", text: feedback, chips: [] });
-      this.post({ type: "planProcessing" }); // grok will process this comment
+      session.userMessageCount += 1;
+      this.emit(session, { type: "userMessage", text: feedback, chips: [] });
+      this.emit(session, { type: "planProcessing" }); // grok will process this comment
     }
 
     if (verdict === "rejected") {
@@ -475,29 +464,32 @@ See design doc for the full state machine diagram.`;
       // front of it to distinguish "Reject + free-form note" from a regular
       // user message. The webview's user bubble (posted earlier in this
       // function) still shows just the user's words.
-      this.setPlanActive(true);
+      this.setPlanActive(session, true);
       if (!feedback) {
-        this.post({
+        this.emit(session, {
           type: "planNotice",
           text: "Plan rejected — staying in Plan mode. Grok is processing the rejection…",
         });
-        this.post({ type: "planProcessing" });
+        this.emit(session, { type: "planProcessing" });
       }
       const promptToGrok = feedback ? `[Plan rejected] ${feedback}` : "[Plan rejected]";
-      this.afterTurn = async () => {
-        this.suppressPlanReject = false;
+      session.afterTurn = async () => {
+        session.suppressPlanReject = false;
         try { await client.setMode("plan"); } catch { /* gate still enforces */ }
-        this.post({ type: "agentStart" });
+        this.emit(session, { type: "agentStart" });
+        this.setStatus(session, "working");
         try {
-          await this.ensurePrimed(client, gen);
-          if (gen !== this.sessionGen) return;
+          await this.ensurePrimed(client, session, gen);
+          if (gen !== session.gen) return;
           const meta = await client.prompt(promptToGrok);
-          if (gen !== this.sessionGen) return;
-          this.post({ type: "agentEnd", meta });
+          if (gen !== session.gen) return;
+          this.emit(session, { type: "agentEnd", meta });
+          this.setStatus(session, "done");
         } catch (err) {
-          if (gen !== this.sessionGen) return;
+          if (gen !== session.gen) return;
           const e = err as any;
-          this.post({ type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+          this.emit(session, { type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+          this.setStatus(session, "error");
         }
       };
       return;
@@ -507,67 +499,84 @@ See design doc for the full state machine diagram.`;
     // always prefixed with the [Plan cancelled] marker (per the primer
     // contract). With a comment, the marker precedes the user's words; without
     // one, the marker stands alone.
-    this.setPlanActive(false);
+    this.setPlanActive(session, false);
     if (!feedback) {
-      this.post({
+      this.emit(session, {
         type: "planNotice",
         text: "Plan abandoned — switched to Agent mode. Grok is processing the cancellation…",
       });
-      this.post({ type: "planProcessing" });
+      this.emit(session, { type: "planProcessing" });
     }
     const promptToGrok = feedback ? `[Plan cancelled] ${feedback}` : "[Plan cancelled]";
-    this.afterTurn = async () => {
-      this.suppressPlanReject = false;
+    session.afterTurn = async () => {
+      session.suppressPlanReject = false;
       try { await client.setMode(ACT_MODE_ID); } catch { /* best-effort */ }
-      this.post({ type: "agentStart" });
+      this.emit(session, { type: "agentStart" });
+      this.setStatus(session, "working");
       try {
         const meta = await client.prompt(promptToGrok);
-        if (gen !== this.sessionGen) return;
-        this.post({ type: "agentEnd", meta });
+        if (gen !== session.gen) return;
+        this.emit(session, { type: "agentEnd", meta });
+        this.setStatus(session, "done");
       } catch (err) {
-        if (gen !== this.sessionGen) return;
+        if (gen !== session.gen) return;
         const e = err as any;
-        this.post({ type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+        this.emit(session, { type: "agentError", text: e?.data?.message ?? e?.message ?? String(err) });
+        this.setStatus(session, "error");
       }
     };
   }
 
   /** Send the extension's standing instructions ("primer") to grok exactly once
-   *  per grok session, lazily — right before the first outbound prompt that needs
-   *  it, not at session start. The primer's user bubble and grok's ack are hidden
-   *  from the live chat (suppressContent). A restored session already carries the
-   *  primer in its replayed history, so it's marked primed during replay and is
-   *  never re-sent. Best-effort: a failed primer leaves the session unprimed (the
-   *  next outbound prompt retries) and never blocks the user's real prompt — the
-   *  plan-gate, not the primer, is the actual enforcement. */
-  private async ensurePrimed(client: AcpClient, gen: number): Promise<void> {
-    if (this.primed) return;
-    const prevSuppress = this.suppressContent;
-    this.suppressContent = true;
-    try {
-      await client.prompt(GROK_PRIMER);
-      if (gen === this.sessionGen) this.primed = true;
-    } catch (e) {
-      this.output.appendLine(`[primer] failed: ${(e as Error).message}`);
-    } finally {
-      this.suppressContent = prevSuppress;
-    }
+   *  per grok session — teaching it the plan-verdict protocol the CLI's buggy
+   *  exit_plan_mode can't convey. It fires EAGERLY and NON-BLOCKING the moment a
+   *  session goes live (startSession kicks this off), so the composer is never
+   *  held: the user can send immediately, and their first real prompt awaits this
+   *  same promise (grok can't run two turns at once) — released the instant the
+   *  silent primer acks. The primer's turn is hidden from live chat
+   *  (suppressContent drops grok's "ok"); the user's own message bubble + the
+   *  Grokking indicator are NOT suppressed (they're not in SUPPRESS_TYPES), so a
+   *  send that overlaps the still-running primer shows as sent right away.
+   *
+   *  Idempotent: returns the existing in-flight promise so a fast send doesn't
+   *  start a second primer; resolves immediately once primed. Best-effort — a
+   *  failed primer clears the promise so the next send retries, and never throws
+   *  to the caller (the plan-gate, not the primer, is the actual enforcement). */
+  private ensurePrimed(client: AcpClient, session: Session, gen: number): Promise<void> {
+    if (session.primed) return Promise.resolve();
+    if (session.primingPromise) return session.primingPromise;
+    const promise = (async () => {
+      session.suppressContent = true;
+      try {
+        await client.prompt(GROK_PRIMER);
+        if (gen === session.gen) session.primed = true;
+      } catch (e) {
+        this.output.appendLine(`[primer] failed: ${(e as Error).message}`);
+      } finally {
+        if (gen === session.gen) session.suppressContent = false;
+        // On failure leave the session unprimed and drop the promise so the next
+        // outbound prompt retries instead of awaiting a dead one.
+        if (!session.primed) session.primingPromise = undefined;
+      }
+    })();
+    session.primingPromise = promise;
+    return promise;
   }
 
   /** Persist this plan (text + verdict) so the resume view can replay every plan
    *  the user resolved in this session — grok's on-disk plan.md only retains the
    *  latest, so we'd otherwise lose plans the agent overwrote later. */
-  private persistPlanVerdict(verdict: "approved" | "abandoned" | "rejected"): void {
-    const sid = this.activeSessionId ?? this.client?.sessionId;
+  private persistPlanVerdict(session: Session, verdict: "approved" | "abandoned" | "rejected"): void {
+    const sid = session.activeSessionId ?? session.client?.sessionId;
     if (!sid) return;
     const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
     const cur = overrides[sid] ?? {};
-    const planText = this.pendingPlanText || "";
-    this.pendingPlanText = "";
+    const planText = session.pendingPlanText || "";
+    session.pendingPlanText = "";
     const plans = appendPlanEntry(cur.plans, {
       text: planText,
       verdict,
-      afterUserMessage: this.userMessageCount,
+      afterUserMessage: session.userMessageCount,
     });
     const next: SessionMetaOverrides = {
       ...overrides,
@@ -577,10 +586,10 @@ See design doc for the full state machine diagram.`;
   }
 
   /** Run and clear any deferred post-turn action set by `handleExitPlan`. */
-  private async runAfterTurn(): Promise<void> {
-    const fn = this.afterTurn;
+  private async runAfterTurn(session: Session): Promise<void> {
+    const fn = session.afterTurn;
     if (!fn) return;
-    this.afterTurn = undefined;
+    session.afterTurn = undefined;
     await fn();
   }
 
@@ -595,14 +604,14 @@ See design doc for the full state machine diagram.`;
    * served roots fall back to a base64 `data:` URI. Best-effort: a failure just
    * drops the media rather than breaking the turn.
    */
-  private async postGeneratedMedia(m: MediaRef, gen: number): Promise<void> {
+  private async postGeneratedMedia(m: MediaRef, session: Session, gen: number): Promise<void> {
     try {
       if (m.kind === "data") {
-        this.post({ type: "media", media: m.media, src: `data:${m.mimeType};base64,${m.data}` });
+        this.emit(session, { type: "media", media: m.media, src: `data:${m.mimeType};base64,${m.data}` });
         return;
       }
       if (m.kind === "uri") {
-        this.post({ type: "media", media: m.media, url: m.uri });
+        this.emit(session, { type: "media", media: m.media, url: m.uri });
         return;
       }
       const mime = m.mimeType || guessMediaMime(m.path);
@@ -611,14 +620,14 @@ See design doc for the full state machine diagram.`;
       const webview = this.view?.webview;
       if (webview && this.isServableFromDisk(m.path)) {
         const src = webview.asWebviewUri(vscode.Uri.file(m.path)).toString();
-        this.post({ type: "media", media: m.media, src, mimeType: mime, path: m.path });
+        this.emit(session, { type: "media", media: m.media, src, mimeType: mime, path: m.path });
         return;
       }
       // Outside the served roots — inline as base64 so it still renders.
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(m.path));
-      if (gen !== this.sessionGen) return;
+      if (gen !== session.gen) return;
       const b64 = Buffer.from(bytes).toString("base64");
-      this.post({ type: "media", media: m.media, src: `data:${mime};base64,${b64}`, path: m.path });
+      this.emit(session, { type: "media", media: m.media, src: `data:${mime};base64,${b64}`, path: m.path });
     } catch (e) {
       this.output.appendLine(`[media] failed to forward generated media: ${(e as Error).message}`);
     }
@@ -724,11 +733,11 @@ See design doc for the full state machine diagram.`;
       "Sign Out",
     );
     if (choice !== "Sign Out") return;
-    // Bump the generation + dispose the client first so its `exit` (and any
-    // in-flight turn) doesn't race the onboarding state we're about to show.
-    this.sessionGen++;
-    this.client?.dispose();
-    this.client = undefined;
+    // Tear down every live session first so no client's `exit` (or in-flight
+    // turn) races the onboarding state we're about to show, then reset focus to a
+    // fresh, unstarted session.
+    this.disposePool();
+    this.focused = new Session();
     const term = vscode.window.createTerminal("Grok Logout");
     term.sendText(`"${cliPath}" logout`);
     this.post({ type: "clearMessages" });
@@ -736,7 +745,8 @@ See design doc for the full state machine diagram.`;
   }
 
   dispose(): void {
-    this.client?.dispose();
+    if (this.reaper) { clearInterval(this.reaper); this.reaper = undefined; }
+    this.disposePool();
     this.editorWatcher?.dispose();
     this.configWatcher?.dispose();
     this.terminalManager.disposeAll();
@@ -748,7 +758,7 @@ See design doc for the full state machine diagram.`;
   // ---------- internals ----------
 
   private async ensureClient(): Promise<AcpClient | undefined> {
-    if (this.client) return this.client;
+    if (this.focused.client) return this.focused.client;
     return this.startSession();
   }
 
@@ -828,12 +838,29 @@ See design doc for the full state machine diagram.`;
       this.post({ type: "onboarding", state: "missing-cli", platform: process.platform });
       return;
     }
-    const resumeId = this.activeSessionId;
-    // Free the binary: bump the generation so the disposed client's events are
-    // ignored, then tear it down before the update replaces the executable.
-    this.sessionGen++;
-    this.client?.dispose();
-    this.client = undefined;
+    // The update tears down the whole pool (the binary is locked while any session
+    // holds it open), so a session that's mid-turn or waiting on you would be
+    // interrupted. Warn first if any are — now that several can run at once, this
+    // is no longer a non-event. (The silent startup auto-update skips this: it runs
+    // before anything is in flight.)
+    const busy = [...this.pool].filter(
+      (s) => s.status === "working" || s.status === "needs-you",
+    ).length;
+    if (busy > 0) {
+      const choice = await vscode.window.showWarningMessage(
+        `Updating the Grok Build CLI will stop ${busy} session${busy === 1 ? "" : "s"} currently in progress. Continue?`,
+        { modal: true },
+        "Update Anyway",
+      );
+      if (choice !== "Update Anyway") return;
+    }
+    const resumeId = this.focused.activeSessionId;
+    // Free the binary: every pooled session's process holds it open (a hard lock
+    // on Windows), so tear the whole pool down before the update replaces the
+    // executable, then resume the focused session on the fresh binary. Other
+    // backgrounded sessions go cold — re-focusing one reloads it from disk.
+    this.disposePool();
+    this.focused = new Session();
     this.post({ type: "clearMessages" });
     this.post({ type: "cliUpdating" });
     try {
@@ -866,88 +893,100 @@ See design doc for the full state machine diagram.`;
    *  hidden context after the restart so the new session keeps the thread. */
   private async restartSession(mode: "clear" | "summarize"): Promise<void> {
     if (mode === "clear") {
-      this.post({ type: "clearMessages" });
+      this.emit(this.focused, { type: "clearMessages" });
       await this.startSession();
       return;
     }
-    const currentClient = this.client;
-    this.post({ type: "summarizing" });
+    const currentClient = this.focused.client;
+    this.emit(this.focused, { type: "summarizing" });
     const chunks: string[] = [];
     const captureChunk = (t: string) => chunks.push(t);
     currentClient?.on("messageChunk", captureChunk);
-    this.suppressContent = true;
+    this.focused.suppressContent = true;
     try {
       await currentClient?.prompt(
         "Summarize our conversation so far in a concise paragraph. Be brief.",
       );
     } catch { /* best effort */ } finally {
       currentClient?.off("messageChunk", captureChunk);
-      this.suppressContent = false;
+      this.focused.suppressContent = false;
     }
     const summary = chunks.join("").trim();
 
-    await this.startSession(); // resets suppressContent to false
+    await this.startSession(); // resets suppressContent + eagerly kicks off the primer
 
-    if (summary && this.client) {
-      this.post({ type: "sessionContext" });
-      this.suppressContent = true;
+    if (summary && this.focused.client) {
+      // Await the eager primer FIRST (it manages its own suppression and ends with
+      // suppressContent=false), THEN re-assert suppression for the hidden summary
+      // injection. Doing it the other way round would let the primer's completion
+      // clear the flag mid-summary and leak "[Context from previous session]".
+      await this.ensurePrimed(this.focused.client, this.focused, this.focused.gen);
+      this.emit(this.focused, { type: "sessionContext" });
+      this.focused.suppressContent = true;
       try {
-        await this.ensurePrimed(this.client, this.sessionGen);
-        await this.client.prompt(`[Context from previous session]\n${summary}`);
+        await this.focused.client.prompt(`[Context from previous session]\n${summary}`);
       } catch { /* best effort */ } finally {
-        this.suppressContent = false;
+        this.focused.suppressContent = false;
       }
     }
   }
 
   private async startSession(resumeId?: string): Promise<AcpClient | undefined> {
-    const gen = ++this.sessionGen;
+    // The session this start (re)builds. Today always the focused one (pool-of-1);
+    // Step D passes a pool member. Its handlers close over `session`/`gen` so a
+    // backgrounded session's events stay bound to it even after focus moves.
+    const session = this.focused;
+    const gen = ++session.gen;
+    session.buffer = [];
+    session.status = "idle";
     // Stop any in-progress voice capture so listening never carries across a
     // new/resumed/restarted session (covers New Session, history resume, and
     // model/effort restarts — all of which route through here).
     this.stopVoiceInput();
-    this.client?.dispose();
-    this.client = undefined;
-    this.autoApprove = false;
-    this.planActive = false;
-    this.afterTurn = undefined;
-    this.hasHistory = false;
-    this.primed = false;
-    this.suppressContent = false;
-    this.suppressPlanReject = false;
-    this.lastPlanText = "";
-    this.pendingPlanText = "";
-    this.userMessageCount = 0;
-    this.inUserMessage = false;
-    this.activeSessionId = undefined;
-    this.titleGenerated = false;
-    this.firstUserMessageForTitle = undefined;
-    this.priming = true;
-    this.post({ type: "modeChanged", modeId: "agent" });
-    if (resumeId) this.post({ type: "clearMessages" });
+    session.client?.dispose();
+    session.client = undefined;
+    session.autoApprove = false;
+    session.planActive = false;
+    session.afterTurn = undefined;
+    session.hasHistory = false;
+    session.primed = false;
+    session.primingPromise = undefined;
+    session.suppressContent = false;
+    session.suppressPlanReject = false;
+    session.lastPlanText = "";
+    session.pendingPlanText = "";
+    session.userMessageCount = 0;
+    session.inUserMessage = false;
+    session.activeSessionId = undefined;
+    session.titleGenerated = false;
+    session.firstUserMessageForTitle = undefined;
+    session.priming = true;
+    this.emit(session, { type: "modeChanged", modeId: "agent" });
+    if (resumeId) this.emit(session, { type: "clearMessages" });
 
     // Lock the composer (spinner, disabled) for the session-start window —
     // start() + newSession()/load — so a prompt can't be sent before the session
     // exists, which would otherwise throw "no session". The primer is NOT sent
     // here; it's deferred to the first real send (ensurePrimed). The success path
     // unlocks once the session is live (below); the failure paths clear it too.
-    this.post({ type: "setBusy", value: true, locked: true });
+    this.emit(session, { type: "setBusy", value: true, locked: true });
 
     const cfg = vscode.workspace.getConfiguration("grok");
     const cliPath = locateGrokCli(cfg.get<string>("cliPath", ""));
     this.cliPath = cliPath || undefined;
     if (!cliPath) {
-      if (gen !== this.sessionGen) return undefined;
-      this.priming = false;
-      this.post({ type: "setBusy", value: false });
-      this.post({ type: "onboarding", state: "missing-cli", platform: process.platform });
+      if (gen !== session.gen) return undefined;
+      this.pool.delete(session);
+      session.priming = false;
+      this.emit(session, { type: "setBusy", value: false });
+      this.emit(session, { type: "onboarding", state: "missing-cli", platform: process.platform });
       return undefined;
     }
 
     // If our extension was upgraded, silently bring the CLI up to date *before*
     // spawning it (once per activation). Bail if a newer start superseded us.
     await this.maybeUpdateCliOnUpgrade(cliPath);
-    if (gen !== this.sessionGen) return undefined;
+    if (gen !== session.gen) return undefined;
 
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const env = this.buildEnv(cwd);
@@ -960,7 +999,7 @@ See design doc for the full state machine diagram.`;
       effort,
       log: (msg) => this.output.appendLine(msg),
     });
-    this.client = client;
+    session.client = client;
 
     // fs handlers (mandatory — the agent calls these to read/write files)
     client.fsRead = async (p: string) => {
@@ -986,8 +1025,8 @@ See design doc for the full state machine diagram.`;
     client.terminal = this.terminalManager;
 
     client.on("initialized", (init) => {
-      if (gen !== this.sessionGen) return;
-      this.post({
+      if (gen !== session.gen) return;
+      this.emit(session, {
         type: "initialized",
         info: {
           cliPath,
@@ -998,9 +1037,9 @@ See design doc for the full state machine diagram.`;
       });
     });
     client.on("session", (res) => {
-      if (gen !== this.sessionGen) return;
-      if (res?.sessionId) this.activeSessionId = res.sessionId;
-      this.post({
+      if (gen !== session.gen) return;
+      if (res?.sessionId) session.activeSessionId = res.sessionId;
+      this.emit(session, {
         type: "session",
         sessionId: res.sessionId,
         models: client.availableModels,
@@ -1008,17 +1047,17 @@ See design doc for the full state machine diagram.`;
       });
     });
     client.on("modelChanged", (id) => {
-      if (gen !== this.sessionGen) return;
-      this.post({ type: "modelChanged", modelId: id });
+      if (gen !== session.gen) return;
+      this.emit(session, { type: "modelChanged", modelId: id });
     });
     client.on("modeChanged", (id) => {
-      if (gen !== this.sessionGen) return;
+      if (gen !== session.gen) return;
       if (id === "plan") {
         // CLI entered plan mode (covers the agent self-initiating it from a
         // natural-language request). Raise our gate so the exit is enforced.
-        this.autoApprove = false;
-        this.setPlanActive(true);
-      } else {
+        session.autoApprove = false;
+        this.setPlanActive(session, true);
+      } else if (session === this.focused) {
         // CLI reports a non-plan mode. Do NOT auto-drop the gate here: the buggy
         // exit_plan_mode emits "default" even when the user chose to keep
         // planning. The gate is lowered only by explicit user action (approve,
@@ -1027,22 +1066,22 @@ See design doc for the full state machine diagram.`;
       }
     });
     client.on("commandsUpdate", (cmds) => {
-      if (gen !== this.sessionGen) return;
-      this.post({ type: "commandsUpdate", commands: cmds });
+      if (gen !== session.gen) return;
+      this.emit(session, { type: "commandsUpdate", commands: cmds });
     });
     client.on("messageChunk", (text: string) => {
-      if (gen !== this.sessionGen) return;
-      this.inUserMessage = false;
-      this.post({ type: "messageChunk", text });
+      if (gen !== session.gen) return;
+      session.inUserMessage = false;
+      this.emit(session, { type: "messageChunk", text });
     });
     client.on("userMessageChunk", (text: string) => {
-      if (gen !== this.sessionGen) return;
+      if (gen !== session.gen) return;
       // grok ≥0.2.33 echoes the *live* prompt back as user_message_chunk; 0.2.3
       // did not (its comment here read "the agent never echoes them back"). The
       // live bubble + userMessageCount come from send(), so a forwarded live
       // echo would render a duplicate bubble and double-count. Only the CLI's
       // session/load *replay* should drive user bubbles from here.
-      if (!this.replaying) return;
+      if (!session.replaying) return;
       // Our own hidden primer(s) replay as user messages. Don't count them toward
       // plan positions (the webview hides them too, via its matching
       // PRIMER_PATTERN) but DO forward so the webview can suppress the whole
@@ -1050,42 +1089,42 @@ See design doc for the full state machine diagram.`;
       // session primed from this: a primer buried in replayed history isn't
       // reliably honored by grok (a /compact can drop it), so the first
       // post-restore send re-primes instead of trusting the replay.
-      if (!this.inUserMessage && isPrimerText(text)) {
-        this.inUserMessage = true;
-        this.post({ type: "userMessageChunk", text });
+      if (!session.inUserMessage && isPrimerText(text)) {
+        session.inUserMessage = true;
+        this.emit(session, { type: "userMessageChunk", text });
         return;
       }
       // The first chunk after a non-user chunk marks the start of a new user
       // message — count it so the next persisted plan knows where it lives.
-      if (!this.inUserMessage) {
-        this.userMessageCount += 1;
-        this.inUserMessage = true;
+      if (!session.inUserMessage) {
+        session.userMessageCount += 1;
+        session.inUserMessage = true;
       }
-      this.post({ type: "userMessageChunk", text });
+      this.emit(session, { type: "userMessageChunk", text });
     });
     client.on("thoughtChunk", (text: string) => {
-      if (gen !== this.sessionGen) return;
-      this.inUserMessage = false;
-      this.post({ type: "thoughtChunk", text });
+      if (gen !== session.gen) return;
+      session.inUserMessage = false;
+      this.emit(session, { type: "thoughtChunk", text });
     });
     client.on("mediaContent", (m: MediaRef) => {
-      if (gen !== this.sessionGen) return;
-      void this.postGeneratedMedia(m, gen);
+      if (gen !== session.gen) return;
+      void this.postGeneratedMedia(m, session, gen);
     });
     client.on("toolCall", (u) => {
-      if (gen !== this.sessionGen) return;
-      this.inUserMessage = false;
-      this.post({ type: "toolCall", call: u });
+      if (gen !== session.gen) return;
+      session.inUserMessage = false;
+      this.emit(session, { type: "toolCall", call: u });
     });
     client.on("toolCallUpdate", (u) => {
-      if (gen !== this.sessionGen) return;
-      this.inUserMessage = false;
-      this.post({ type: "toolCallUpdate", call: u });
+      if (gen !== session.gen) return;
+      session.inUserMessage = false;
+      this.emit(session, { type: "toolCallUpdate", call: u });
     });
     client.on("plan", (u) => {
-      if (gen !== this.sessionGen) return;
+      if (gen !== session.gen) return;
       // Stash plan text — x.ai/exit_plan_mode params are typically empty
-      this.lastPlanText =
+      session.lastPlanText =
         (typeof u?.plan === "string" ? u.plan : "") ||
         (typeof u?.planText === "string" ? u.planText : "") ||
         (typeof u?.content === "string" ? u.content : "") ||
@@ -1093,27 +1132,27 @@ See design doc for the full state machine diagram.`;
       this.output.appendLine(`[plan] event payload keys: ${Object.keys(u ?? {}).join(", ")}`);
     });
     client.on("promptComplete", (meta) => {
-      if (gen !== this.sessionGen) return;
-      this.post({ type: "promptComplete", meta });
+      if (gen !== session.gen) return;
+      this.emit(session, { type: "promptComplete", meta });
     });
     client.on("xaiNotification", (u) => {
-      if (gen !== this.sessionGen) return;
-      this.post({ type: "xaiNotification", update: u });
+      if (gen !== session.gen) return;
+      this.emit(session, { type: "xaiNotification", update: u });
     });
     client.on("permissionRequest", (req: PermissionRequest) => {
-      if (gen !== this.sessionGen) return;
+      if (gen !== session.gen) return;
       // While planning, decline any mutating permission outright. Agent mode
       // skips this prompt for edits it deems safe — the fs/terminal gate is the
       // real backstop — but if the CLI *does* ask, we say no without bothering
       // the user.
-      if (this.planActive && shouldRejectPermission(req.toolCall?.kind, {
+      if (session.planActive && shouldRejectPermission(req.toolCall?.kind, {
         active: true,
         workspaceRoot: cwd,
       })) {
         const rejectId = pickRejectOption(req.options);
         if (rejectId) {
           client.respondPermission(req.id, rejectId);
-          this.post({
+          this.emit(session, {
             type: "planNotice",
             text: `Plan mode declined a ${req.toolCall?.kind ?? "tool"} request — approve the plan first.`,
           });
@@ -1121,40 +1160,44 @@ See design doc for the full state machine diagram.`;
         }
         // No decline option offered — fall through and let the user decide.
       }
-      if (this.autoApprove) {
+      if (session.autoApprove) {
         const opt = req.options.find((o) => o.kind === "allow_always") ??
                     req.options.find((o) => o.kind === "allow_once");
         if (opt) { client.respondPermission(req.id, opt.optionId); return; }
       }
-      this.post({ type: "permissionRequest", req });
+      this.emit(session, { type: "permissionRequest", req });
+      this.setStatus(session, "needs-you");
     });
     client.on("mutationBlocked", (info: { kind: string; target: string }) => {
-      if (gen !== this.sessionGen) return;
-      this.post({ type: "planBlocked", kind: info.kind, target: info.target });
+      if (gen !== session.gen) return;
+      this.emit(session, { type: "planBlocked", kind: info.kind, target: info.target });
     });
     client.on("planFileContent", (content: string) => {
-      if (gen !== this.sessionGen) return;
-      if (typeof content === "string" && content.trim()) this.lastPlanText = content;
+      if (gen !== session.gen) return;
+      if (typeof content === "string" && content.trim()) session.lastPlanText = content;
     });
     client.on("exitPlanRequest", (req: ExitPlanRequest) => {
-      if (gen !== this.sessionGen) return;
-      void this.postExitPlanRequest(req, gen);
+      if (gen !== session.gen) return;
+      void this.postExitPlanRequest(req, session, gen);
     });
     client.on("questionRequest", (req: QuestionRequest) => {
-      if (gen !== this.sessionGen) return;
+      if (gen !== session.gen) return;
       // Questions are read-only and need a human — surface them in every mode
       // (plan/YOLO included); there's no sensible auto-answer.
-      this.post({ type: "questionRequest", req });
+      this.emit(session, { type: "questionRequest", req });
+      this.setStatus(session, "needs-you");
     });
     client.on("exit", (code) => {
-      if (gen !== this.sessionGen) return; // suppress exit events from disposed/replaced clients
-      this.post({ type: "exit", code });
+      if (gen !== session.gen) return; // suppress exit events from disposed/replaced clients
+      this.emit(session, { type: "exit", code });
+      this.setStatus(session, "error");
+      this.pool.delete(session); // the process is gone; it's no longer a live pool member
     });
     client.on("stderr", (text: string) => this.output.append(text));
 
     try {
       await client.start();
-      if (gen !== this.sessionGen) { client.dispose(); return undefined; }
+      if (gen !== session.gen) { client.dispose(); return undefined; }
       const defaultModel = cfg.get<string>("defaultModel", "");
       if (resumeId) {
         // Queue any saved plans BEFORE replay starts so the webview can interleave
@@ -1163,8 +1206,8 @@ See design doc for the full state machine diagram.`;
         const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
         const saved = overrides[resumeId]?.plans ?? [];
         if (saved.length > 0) {
-          this.post({ type: "planHistoryQueue", plans: await this.withPlanReviewPaths(saved, resumeId) });
-          this.lastPlanText = saved[saved.length - 1].text;
+          this.emit(session, { type: "planHistoryQueue", plans: await this.withPlanReviewPaths(saved, resumeId) });
+          session.lastPlanText = saved[saved.length - 1].text;
         } else {
           // Legacy session (no per-plan persistence): fall back to the on-disk
           // latest plan, which we'll render at the bottom after replay.
@@ -1178,7 +1221,7 @@ See design doc for the full state machine diagram.`;
               } catch (e) {
                 this.output.appendLine(`[plan-review] ${(e as Error).message}`);
               }
-              this.post({
+              this.emit(session, {
                 type: "planHistoryQueue",
                 plans: [{
                   text: planText,
@@ -1187,7 +1230,7 @@ See design doc for the full state machine diagram.`;
                   planName: snapshot?.name,
                 }],
               });
-              this.lastPlanText = planText;
+              session.lastPlanText = planText;
             } catch (e) {
               this.output.appendLine(`[plan-restore] ${(e as Error).message}`);
             }
@@ -1196,8 +1239,8 @@ See design doc for the full state machine diagram.`;
 
         // Bracket the replay so the webview can render finalized "Thought"
         // headers (no elapsed time — the original timing isn't in the stream).
-        this.post({ type: "historyReplay", active: true });
-        this.replaying = true;
+        this.emit(session, { type: "historyReplay", active: true });
+        session.replaying = true;
         try {
           await client.loadSession(resumeId, defaultModel || undefined);
         } catch (e) {
@@ -1212,12 +1255,12 @@ See design doc for the full state machine diagram.`;
             `[resume] kept the session's own model; default '${defaultModel}' needs a different agent`,
           );
         } finally {
-          this.replaying = false;
-          this.post({ type: "historyReplay", active: false });
+          session.replaying = false;
+          this.emit(session, { type: "historyReplay", active: false });
         }
-        this.activeSessionId = resumeId;
-        this.titleGenerated = true; // existing session, name already in storage
-        this.hasHistory = true;
+        session.activeSessionId = resumeId;
+        session.titleGenerated = true; // existing session, name already in storage
+        session.hasHistory = true;
 
         // Plan-gate restoration: the CLI replays its own current_mode_update
         // events during loadSession, which our modeChanged handler honors by
@@ -1225,34 +1268,41 @@ See design doc for the full state machine diagram.`;
         // decision (see plan-restore.ts) so a Cancelled or Approved session
         // doesn't come back stuck in Plan mode.
         const decision = decideRestoreState(saved);
-        this.setPlanActive(decision.planActive);
+        this.setPlanActive(session, decision.planActive);
         const targetMode = decision.cliMode === "plan" ? "plan" : ACT_MODE_ID;
         try { await client.setMode(targetMode); } catch { /* best-effort */ }
       } else {
         await client.newSession(defaultModel || undefined);
-        this.activeSessionId = client.sessionId;
+        session.activeSessionId = client.sessionId;
       }
-      if (gen !== this.sessionGen) { client.dispose(); this.client = undefined; return undefined; }
+      if (gen !== session.gen) { client.dispose(); session.client = undefined; return undefined; }
 
       // Session is live — unlock the composer now. The "system prompt" (primer)
-      // that teaches grok the plan-verdict protocol is no longer sent here; it's
-      // deferred to the user's first real send (ensurePrimed), on a new OR
-      // restored session. This drops the startup round-trip and the busy lock
-      // that waited on it, and a glance-only restore costs nothing. See
+      // that teaches grok the plan-verdict protocol fires here EAGERLY and in the
+      // BACKGROUND (not awaited), on a new OR restored session, so the composer is
+      // never blocked waiting on it. The user can send immediately; their first
+      // real prompt awaits the same priming promise (ensurePrimed) and is released
+      // the instant the silent primer acks. A glance-only restore costs only one
+      // cheap background round-trip (the v4 primer no longer explores). See
       // src/grok-primer.ts.
-      this.priming = false;
-      this.post({ type: "setBusy", value: false });
+      session.priming = false;
+      this.pool.add(session);
+      this.touch(session);
+      this.reapPool(); // enforce the LRU cap now that the pool grew
+      this.emit(session, { type: "setBusy", value: false });
+      void this.ensurePrimed(client, session, gen);
     } catch (err) {
-      if (gen !== this.sessionGen) { client.dispose(); return undefined; }
+      if (gen !== session.gen) { client.dispose(); return undefined; }
       const msg = (err as any).message ?? String(err);
       client.dispose();
-      this.client = undefined;
-      this.priming = false;
-      this.post({ type: "setBusy", value: false });
+      session.client = undefined;
+      this.pool.delete(session);
+      session.priming = false;
+      this.emit(session, { type: "setBusy", value: false });
       if (/auth|unauthor|forbidden|401|403|api[_\s-]?key|credential|sign.?in/i.test(msg)) {
-        this.post({ type: "onboarding", state: "auth-required" });
+        this.emit(session, { type: "onboarding", state: "auth-required" });
       } else {
-        this.post({ type: "error", text: `Failed to start Grok: ${msg}` });
+        this.emit(session, { type: "error", text: `Failed to start Grok: ${msg}` });
       }
       return undefined;
     }
@@ -1268,10 +1318,10 @@ See design doc for the full state machine diagram.`;
         await this.handleSend(msg.text, msg.chips);
         break;
       case "newSession":
-        await this.startSession();
+        await this.newFocusedSession();
         break;
       case "cancel":
-        await this.client?.cancel();
+        await this.focused.client?.cancel();
         break;
       case "pickModel":
         await this.pickModel();
@@ -1324,26 +1374,29 @@ See design doc for the full state machine diagram.`;
         this.addDroppedFile(msg.path, msg.shift);
         break;
       case "permissionAnswer":
-        this.client?.respondPermission(msg.requestId, msg.optionId);
+        this.focused.client?.respondPermission(msg.requestId, msg.optionId);
+        this.setStatus(this.focused, "working"); // turn resumes after the answer
         break;
       case "exitPlanAnswer":
         this.handleExitPlan(msg.requestId, msg.verdict, msg.comment);
         break;
       case "questionAnswer":
-        this.client?.respondQuestion(msg.requestId, msg.answers ?? {}, msg.annotations ?? {});
+        this.focused.client?.respondQuestion(msg.requestId, msg.answers ?? {}, msg.annotations ?? {});
+        this.setStatus(this.focused, "working");
         break;
       case "questionCancel":
-        this.client?.respondQuestionCancelled(msg.requestId);
+        this.focused.client?.respondQuestionCancelled(msg.requestId);
+        this.setStatus(this.focused, "working");
         break;
       case "setModel":
         await this.switchModel(msg.modelId);
         break;
       case "setEffort": {
-        if (this.priming) break; // ignore changes fired mid-session-start (see switchModel)
+        if (this.focused.priming) break; // ignore changes fired mid-session-start (see switchModel)
         const newLevel = msg.level;
         const cfg2 = vscode.workspace.getConfiguration("grok");
 
-        if (!this.hasHistory || !this.client) {
+        if (!this.focused.hasHistory || !this.focused.client) {
           await cfg2.update("defaultEffort", newLevel, vscode.ConfigurationTarget.Global);
           await this.startSession();
           break;
@@ -1438,7 +1491,7 @@ See design doc for the full state machine diagram.`;
         this.postSessionsList();
         break;
       case "resumeSession":
-        await this.startSession(msg.id);
+        await this.openSession(msg.id);
         break;
       case "renameSession":
         this.renameSession(msg.id, msg.name);
@@ -1469,10 +1522,21 @@ See design doc for the full state machine diagram.`;
       overrides,
       log: (m) => this.output.appendLine(m),
     });
+    // Dashboard dot per grok-session-id (live status + persisted unread badge), so
+    // the dropdown can color each row. Computed for every listed row, plus any live
+    // pool member not yet written to disk (a brand-new session has no summary.json).
+    const dots: Record<string, Dot> = {};
+    for (const e of entries) dots[e.id] = this.dotForId(e.id);
+    for (const s of this.pool) {
+      if (s.activeSessionId && !(s.activeSessionId in dots)) {
+        dots[s.activeSessionId] = this.dotForId(s.activeSessionId);
+      }
+    }
     this.post({
       type: "sessions",
       entries,
-      activeId: this.activeSessionId,
+      activeId: this.focused.activeSessionId,
+      dots,
     });
   }
 
@@ -1519,8 +1583,16 @@ See design doc for the full state machine diagram.`;
       delete next[id];
       void this.context.globalState.update(SESSION_META_KEY, next);
     }
-    if (this.activeSessionId === id) {
-      await this.startSession();
+    // Tear down the live process if this session is in the pool (focused or
+    // backgrounded), then re-home focus if we just killed the visible one.
+    const live = [...this.pool].find((s) => s.activeSessionId === id);
+    if (live) {
+      const wasFocused = live === this.focused;
+      this.disposeSession(live);
+      if (wasFocused) {
+        this.focused = new Session();
+        await this.startSession();
+      }
     }
     this.postSessionsList();
   }
@@ -1809,23 +1881,24 @@ See design doc for the full state machine diagram.`;
     void tmp; void after;
   }
 
-  private async postExitPlanRequest(req: ExitPlanRequest, gen: number): Promise<void> {
-    const plan = req.plan || this.lastPlanText;
+  private async postExitPlanRequest(req: ExitPlanRequest, session: Session, gen: number): Promise<void> {
+    const plan = req.plan || session.lastPlanText;
     let snapshot: { path: string; name: string } | undefined;
     try {
       snapshot = await this.createPlanReviewSnapshot(plan);
     } catch (e) {
       this.output.appendLine(`[plan-review] ${(e as Error).message}`);
     }
-    if (gen !== this.sessionGen) return;
+    if (gen !== session.gen) return;
     // Hold onto the plan text until the user picks a verdict so persistPlanVerdict
     // can save it. Cleared (via resolved/pending) so the next plan starts fresh.
-    this.pendingPlanText = plan;
-    this.lastPlanText = "";
-    this.post({
+    session.pendingPlanText = plan;
+    session.lastPlanText = "";
+    this.emit(session, {
       type: "exitPlanRequest",
       req: { ...req, plan, planPath: snapshot?.path, planName: snapshot?.name },
     });
+    this.setStatus(session, "needs-you");
   }
 
   private async withPlanReviewPaths<T extends { text: string }>(
@@ -1848,7 +1921,7 @@ See design doc for the full state machine diagram.`;
   private async createPlanReviewSnapshot(plan: string, sessionId?: string): Promise<{ path: string; name: string }> {
     const content = plan && plan.trim() ? plan : "(empty plan)\n";
     const sessionPart = sanitizePlanReviewFilePart(
-      sessionId ?? this.activeSessionId ?? this.client?.sessionId ?? "session",
+      sessionId ?? this.focused.activeSessionId ?? this.focused.client?.sessionId ?? "session",
     ).slice(0, 80);
     const dir = vscode.Uri.joinPath(this.context.globalStorageUri, "plan-reviews", sessionPart);
     await vscode.workspace.fs.createDirectory(dir);
@@ -1902,7 +1975,8 @@ See design doc for the full state machine diagram.`;
   private async handleSend(text: string, chips: FileChip[]): Promise<void> {
     const client = await this.ensureClient();
     if (!client) return;
-    const gen = this.sessionGen;
+    const session = this.focused;
+    const gen = session.gen;
 
     const finalPrompt = buildPrompt(text, chips, {
       readFile: (p) => fs.readFileSync(p, "utf8"),
@@ -1912,49 +1986,55 @@ See design doc for the full state machine diagram.`;
     this.chips = [];
     this.postChips();
 
-    const isFirstSend = !this.hasHistory;
-    this.hasHistory = true;
-    if (isFirstSend) this.firstUserMessageForTitle = text;
+    const isFirstSend = !session.hasHistory;
+    session.hasHistory = true;
+    if (isFirstSend) session.firstUserMessageForTitle = text;
     const sentChips = chips.filter((c) => !c.hidden);
-    this.userMessageCount += 1;
-    this.inUserMessage = false; // live send isn't part of the streamed-chunk count path
-    this.post({ type: "userMessage", text, chips: sentChips });
-    this.post({ type: "agentStart" });
+    session.userMessageCount += 1;
+    session.inUserMessage = false; // live send isn't part of the streamed-chunk count path
+    this.emit(session, { type: "userMessage", text, chips: sentChips });
+    this.emit(session, { type: "agentStart" });
+    this.setStatus(session, "working");
 
     try {
-      // First real send of a fresh session: slip the hidden primer in as its own
-      // turn first (no-op once primed / on a restored, already-primed session).
-      await this.ensurePrimed(client, gen);
-      if (gen !== this.sessionGen) return;
+      // The hidden primer was kicked off eagerly when the session went live, so
+      // this usually just awaits an already-settled promise. If the user sent
+      // before it acked, we hold the real prompt here until it does (grok runs one
+      // turn at a time) — the user's bubble already shows as sent and the Grokking
+      // indicator covers the gap. If the eager primer failed, this retries it.
+      await this.ensurePrimed(client, session, gen);
+      if (gen !== session.gen) return;
       const meta = await client.prompt(finalPrompt);
-      if (gen !== this.sessionGen) return; // session was switched mid-turn
+      if (gen !== session.gen) return; // session was switched mid-turn
       // Skip agentEnd if a verdict was clicked mid-turn (afterTurn is queued).
       // Otherwise busy clears here, then the user could send during the brief
       // gap before afterTurn's own client.prompt starts. afterTurn emits its
       // own agentEnd at the end of its prompt, so busy stays true throughout.
-      if (!this.afterTurn) {
-        this.post({ type: "agentEnd", meta });
+      if (!session.afterTurn) {
+        this.emit(session, { type: "agentEnd", meta });
+        this.setStatus(session, "done");
       }
-      this.maybeGenerateTitle();
+      this.maybeGenerateTitle(session);
     } catch (err) {
-      if (gen !== this.sessionGen) return; // prompt rejected because we disposed the old client — don't leak the error into the new session
+      if (gen !== session.gen) return; // prompt rejected because we disposed the old client — don't leak the error into the new session
       const e = err as any;
       const message = e?.data?.message ?? e?.message ?? String(err);
-      this.post({ type: "agentError", text: message });
+      this.emit(session, { type: "agentError", text: message });
+      this.setStatus(session, "error");
     } finally {
       // If the user approved/declined a plan mid-turn, the follow-up action was
       // deferred until now (a new prompt can't overlap the one above).
-      try { await this.runAfterTurn(); }
-      finally { this.suppressPlanReject = false; } // safety net for plan-reject suppression
+      try { await this.runAfterTurn(session); }
+      finally { session.suppressPlanReject = false; } // safety net for plan-reject suppression
     }
   }
 
-  private maybeGenerateTitle(): void {
-    if (this.titleGenerated) return;
-    const sid = this.client?.sessionId ?? this.activeSessionId;
-    const first = this.firstUserMessageForTitle;
+  private maybeGenerateTitle(session: Session): void {
+    if (session.titleGenerated) return;
+    const sid = session.client?.sessionId ?? session.activeSessionId;
+    const first = session.firstUserMessageForTitle;
     if (!sid || !first) return;
-    this.titleGenerated = true;
+    session.titleGenerated = true;
     const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
     if (overrides[sid]?.customName) return;
     const cleaned = first.replace(/\s+/g, " ").trim();
@@ -1988,9 +2068,17 @@ See design doc for the full state machine diagram.`;
     this.post({ type: "chips", chips: this.chips });
   }
 
+  // grok's OUTPUT for a hidden turn (primer / summary injection) — dropped from
+  // both the buffer and the live view. Deliberately excludes `userMessage` and
+  // `agentStart`: those are the user's own input bubble + the "grok is starting"
+  // lifecycle marker, emitted only by genuine user-initiated turns. With the
+  // eager non-blocking primer, a user send can overlap the still-running silent
+  // primer; suppressing those two would swallow the user's own message and the
+  // Grokking indicator. The primer/summary injections never emit them, so leaving
+  // them out costs those flows nothing.
   private static readonly SUPPRESS_TYPES = new Set([
     "messageChunk", "userMessageChunk", "thoughtChunk", "toolCall", "toolCallUpdate",
-    "promptComplete", "xaiNotification", "userMessage", "agentStart", "agentEnd",
+    "promptComplete", "xaiNotification", "agentEnd",
   ]);
   // Subset: content only, not lifecycle. Lets promptComplete/agentEnd through so
   // the webview's `busy` state clears when the false-approval turn ends.
@@ -1999,9 +2087,202 @@ See design doc for the full state machine diagram.`;
   ]);
 
   private post(message: any): void {
-    if (this.suppressContent && GrokSidebar.SUPPRESS_TYPES.has(message.type)) return;
-    if (this.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
+    if (this.focused.suppressContent && GrokSidebar.SUPPRESS_TYPES.has(message.type)) return;
+    if (this.focused.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
     this.view?.webview.postMessage(message);
+  }
+
+  /**
+   * Session-scoped post. Records the message in that session's view buffer (so a
+   * focus switch can rebuild its chat losslessly — clearMessages + replay) and,
+   * when the session is the focused one, forwards it to the webview. Per-session
+   * suppress flags drop primer/summary content from BOTH the buffer and the live
+   * view (so they never reappear on replay). `clearMessages` resets the buffer —
+   * the replay path issues its own clear before replaying, and a (re)started
+   * session begins empty. Background sessions buffer silently; nothing reaches
+   * the webview until they're focused. (Pool-of-1 today: session is always the
+   * focused one, so this is behaviorally identical to `post`.)
+   */
+  private emit(session: Session, message: any): void {
+    if (session.suppressContent && GrokSidebar.SUPPRESS_TYPES.has(message.type)) return;
+    if (session.suppressPlanReject && GrokSidebar.PLAN_REJECT_SUPPRESS.has(message.type)) return;
+    if (message.type === "clearMessages") session.buffer = [];
+    else session.buffer.push(message);
+    if (session === this.focused) this.view?.webview.postMessage(message);
+  }
+
+  // ---------- session pool ----------
+
+  /**
+   * Make `session` the visible one and rebuild the chat from its buffer. The
+   * buffer holds every post that built that session's view (in order), so a
+   * clear + replay reconstructs it losslessly — including a turn still in flight
+   * (its still-wired handlers keep emitting straight to the webview once focused).
+   * Bypasses `emit` deliberately: we post the buffer's contents to the webview
+   * without re-running the suppress/clearMessages bookkeeping (that already ran
+   * when each message was first buffered).
+   */
+  private focusSession(session: Session): void {
+    if (session === this.focused) return;
+    this.focused = session;
+    this.touch(session);
+    this.markRead(session); // opening it clears any unread (green/red) badge
+    const wv = this.view?.webview;
+    if (wv) {
+      wv.postMessage({ type: "clearMessages" });
+      for (const m of session.buffer) wv.postMessage(m);
+    }
+    this.postMode();
+    this.postSessionsList();
+  }
+
+  /**
+   * Leave the focused session running in the pool so it can be re-focused later
+   * — unless it's an untouched, idle session, which isn't worth a live process,
+   * so we tear it down. Called before switching focus to a new/other session.
+   */
+  private parkFocused(): void {
+    const cur = this.focused;
+    const busy = cur.status === "working" || cur.status === "needs-you";
+    if (!cur.hasHistory && !cur.afterTurn && !busy) this.disposeSession(cur);
+  }
+
+  /** Tear down one session's live process and drop it from the pool. Bumps its
+   *  generation so any in-flight handlers/awaits bound to the old client bail.
+   *  Recomputes the dot after removal — a reaped session that's still unread stays
+   *  green; an idle/read one goes gray. */
+  private disposeSession(session: Session): void {
+    const id = session.activeSessionId;
+    session.gen++;
+    session.client?.dispose();
+    session.client = undefined;
+    this.pool.delete(session);
+    if (id) this.post({ type: "sessionDot", id, dot: this.dotForId(id) });
+  }
+
+  /** Stamp a session's recency for LRU/TTL reaping (created / focused / made busy). */
+  private touch(session: Session): void {
+    session.lastActiveAt = Date.now();
+  }
+
+  /**
+   * Enforce the pool bounds (idle TTL + LRU cap). Silently tears down whatever the
+   * pure policy selects — never the focused session, never a working/needs-you one.
+   * Called eagerly after each new start (cap) and on the periodic timer (TTL).
+   */
+  private reapPool(): void {
+    const candidates = [...this.pool].map((session) => ({
+      session,
+      status: session.status,
+      lastActiveAt: session.lastActiveAt,
+      focused: session === this.focused,
+    }));
+    const doomed = selectReapable(candidates, {
+      maxLive: GrokSidebar.MAX_LIVE_SESSIONS,
+      idleTtlMs: GrokSidebar.IDLE_TTL_MS,
+      now: Date.now(),
+    });
+    for (const c of doomed) this.disposeSession(c.session);
+  }
+
+  /**
+   * Update a session's dashboard status and push just that dot to the webview
+   * (cheap — no disk read, unlike postSessionsList). The history dropdown colors
+   * each live session's row by this; a cold session (not in the pool) shows no
+   * dot. Only emits when the value actually changes and the session has a grok id
+   * to key the dot on.
+   */
+  private setStatus(session: Session, status: SessionStatus): void {
+    if (session.status === status) return;
+    session.status = status;
+    // Activity refreshes the LRU/TTL clock so a busy session never ages out.
+    if (status === "working" || status === "needs-you") this.touch(session);
+    // A turn that finishes while the user is looking at a *different* session
+    // becomes "unread" (green/red dot) until they open it. If it's the focused
+    // session, they watched it happen — no badge.
+    if ((status === "done" || status === "error") && session !== this.focused) {
+      this.setMetaUnread(session.activeSessionId, true, status === "error");
+    }
+    this.pushDot(session);
+  }
+
+  /** Push just this session's recomputed dot to the webview (cheap — no disk read
+   *  beyond the small meta object). Used on status changes, read/unread changes,
+   *  and on reaping (where the session has left the pool but may stay green). */
+  private pushDot(session: Session): void {
+    const id = session.activeSessionId;
+    if (id) this.post({ type: "sessionDot", id, dot: this.dotForId(id) });
+  }
+
+  /** The dashboard dot for a grok-session id, from live status (if it's a live pool
+   *  member) plus the persisted unread badge (which outlives the live process). */
+  private dotForId(id: string): Dot {
+    const live = [...this.pool].find((s) => s.activeSessionId === id);
+    const meta = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {})[id];
+    return computeDot({ liveStatus: live?.status, unread: meta?.unread, unreadError: meta?.unreadError });
+  }
+
+  /** Persist (or clear) a session's unread badge in globalState session-meta. */
+  private setMetaUnread(id: string | undefined, unread: boolean, error: boolean): void {
+    if (!id) return;
+    const overrides = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {});
+    const cur = overrides[id] ?? {};
+    const next: SessionMetaOverrides = { ...overrides };
+    if (unread) {
+      if (cur.unread && !!cur.unreadError === error) return; // unchanged
+      next[id] = { ...cur, unread: true, unreadError: error || undefined };
+    } else {
+      if (!cur.unread && !cur.unreadError) return; // nothing to clear
+      const { unread: _u, unreadError: _e, ...rest } = cur;
+      if (Object.keys(rest).length === 0) delete next[id];
+      else next[id] = rest;
+    }
+    void this.context.globalState.update(SESSION_META_KEY, next);
+  }
+
+  /** Clear a session's unread badge (it's being opened/viewed) and refresh its dot. */
+  private markRead(session: Session): void {
+    const id = session.activeSessionId;
+    if (!id) return;
+    const meta = this.context.globalState.get<SessionMetaOverrides>(SESSION_META_KEY, {})[id];
+    if (!meta?.unread && !meta?.unreadError) return;
+    this.setMetaUnread(id, false, false);
+    this.pushDot(session);
+  }
+
+  /** Tear down every live session (logout, CLI update, extension teardown). */
+  private disposePool(): void {
+    for (const s of this.pool) {
+      s.gen++;
+      s.client?.dispose();
+      s.client = undefined;
+    }
+    this.pool.clear();
+  }
+
+  /** Start a brand-new session, keeping the current one alive in the background. */
+  private async newFocusedSession(): Promise<void> {
+    this.parkFocused();
+    this.focused = new Session();
+    await this.startSession();
+  }
+
+  /**
+   * Open the session with grok id `id`. If it's already live in the pool, re-focus
+   * it instantly (lossless buffer replay — no reload). Otherwise park the current
+   * session and load this one cold from grok's on-disk history into a fresh member.
+   */
+  private async openSession(id: string): Promise<void> {
+    for (const s of this.pool) {
+      if (s.activeSessionId === id && s.client) {
+        this.focusSession(s);
+        return;
+      }
+    }
+    this.parkFocused();
+    this.focused = new Session();
+    await this.startSession(id);
+    this.markRead(this.focused); // opening a cold session clears its unread badge
   }
 
   private reveal(): void {

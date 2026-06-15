@@ -115,6 +115,69 @@ describe("session rows (regression: only the label was clickable)", () => {
   });
 });
 
+describe("session status dots (Agent Dashboard)", () => {
+  const entries = [
+    { id: "s1", displayName: "Working one", numMessages: 4, updatedAt: Date.now() },
+    { id: "s2", displayName: "Resting one", numMessages: 2, updatedAt: Date.now() },
+    { id: "s3", displayName: "Unread one", numMessages: 1, updatedAt: Date.now() },
+  ];
+
+  function openWithDots(dots: Record<string, string>, activeId: string | null = null) {
+    const h = bootWebview();
+    click(h.window, $(h.doc, "history-btn"));
+    h.posted.length = 0;
+    dispatch(h.window, { type: "sessions", entries, activeId, dots });
+    return h;
+  }
+
+  const dotOf = (doc: Document, id: string) =>
+    doc.querySelector(`[data-session-dot="${id}"]`) as HTMLElement;
+
+  it("colors each row's dot from the dots map; rows with no entry render gray (dot-none)", () => {
+    const { doc } = openWithDots({ s1: "working", s2: "unread" });
+    expect(dotOf(doc, "s1").className).toContain("dot-working");
+    expect(dotOf(doc, "s2").className).toContain("dot-unread");
+    // s3 is absent from the map → at rest → gray default.
+    expect(dotOf(doc, "s3").className).toContain("dot-none");
+  });
+
+  it("renders each dot value with its class (working/needs-you/unread/error)", () => {
+    const { doc } = openWithDots({ s1: "needs-you", s2: "unread", s3: "error" });
+    expect(dotOf(doc, "s1").className).toContain("dot-needs-you");
+    expect(dotOf(doc, "s2").className).toContain("dot-unread");
+    expect(dotOf(doc, "s3").className).toContain("dot-error");
+  });
+
+  it("patches a single dot incrementally on a sessionDot message (no re-render)", () => {
+    const { window, doc } = openWithDots({ s1: "working", s2: "unread" });
+    const before = dotOf(doc, "s1");
+    dispatch(window, { type: "sessionDot", id: "s1", dot: "needs-you" });
+    // Same element, mutated in place — not a fresh row.
+    expect(dotOf(doc, "s1")).toBe(before);
+    expect(dotOf(doc, "s1").className).toContain("dot-needs-you");
+    // The other dot is untouched.
+    expect(dotOf(doc, "s2").className).toContain("dot-unread");
+  });
+
+  it("drops a dot to gray when sessionDot clears it to none (opened / reaped+read)", () => {
+    const { window, doc } = openWithDots({ s1: "unread" });
+    dispatch(window, { type: "sessionDot", id: "s1", dot: "none" });
+    expect(dotOf(doc, "s1").className).toContain("dot-none");
+  });
+
+  it("keeps a green unread dot when the session is reaped but still unopened", () => {
+    // disposeSession recomputes the dot; an unread reaped session stays green.
+    const { window, doc } = openWithDots({ s1: "working" });
+    dispatch(window, { type: "sessionDot", id: "s1", dot: "unread" });
+    expect(dotOf(doc, "s1").className).toContain("dot-unread");
+  });
+
+  it("keeps the dot's tooltip in sync with its state", () => {
+    const { doc } = openWithDots({ s1: "working" });
+    expect(dotOf(doc, "s1").title).toBe("Working");
+  });
+});
+
 describe("mode picker (the plan-gate entry path)", () => {
   it("offers Agent / Plan / YOLO and posts setMode with the chosen mode id", () => {
     const { window, posted, doc } = bootWebview();
@@ -232,6 +295,110 @@ describe("reasoning trace (regression: thinking traces no longer expandable)", (
     click(window, hdr);
     expect(body.hidden).toBe(true);
     expect(chevron.textContent).toBe("▶");
+  });
+});
+
+describe("Grokking… indicator (waiting placeholder)", () => {
+  const grokking = (doc: Document) => doc.querySelector(".grokking") as HTMLElement | null;
+
+  it("mounts on agentStart with the Thinking-style animated label and no chevron", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+
+    const el = grokking(doc);
+    expect(el).not.toBeNull();
+    const label = el!.querySelector(".grokking-label") as HTMLElement;
+    expect(label.textContent).toBe("Grokking");
+    // Same animated ellipsis as the Thinking header…
+    expect(label.className).toContain("loading-dots");
+    // …but NOT expandable: no chevron, no thinking-body, not a .thinking block.
+    expect(el!.querySelector(".thinking-chevron")).toBeNull();
+    expect(el!.querySelector(".thinking-body")).toBeNull();
+    expect(el!.classList.contains("thinking")).toBe(false);
+  });
+
+  it("is replaced in place by the Thinking block on the first thought chunk", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+    expect(grokking(doc)).not.toBeNull();
+
+    dispatch(window, { type: "thoughtChunk", text: "considering…" });
+    expect(grokking(doc)).toBeNull();
+    expect(doc.querySelector(".msg.thinking")).not.toBeNull();
+  });
+
+  it("is replaced by the agent bubble when the turn streams text without thinking", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+    dispatch(window, { type: "messageChunk", text: "Here is the answer." });
+    expect(grokking(doc)).toBeNull();
+    expect(doc.querySelector(".msg.agent")).not.toBeNull();
+  });
+
+  it("is replaced when the first content of the turn is a tool call", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+    dispatch(window, {
+      type: "toolCall",
+      call: { toolCallId: "t1", title: "read foo.ts", kind: "read", status: "in_progress" },
+    });
+    expect(grokking(doc)).toBeNull();
+    expect(doc.querySelector(".tool-group")).not.toBeNull();
+  });
+
+  it("shows on every turn, not just the first (a general typing indicator)", () => {
+    const { window, doc } = bootWebview();
+    // Turn 1 completes.
+    dispatch(window, { type: "agentStart" });
+    dispatch(window, { type: "messageChunk", text: "first" });
+    dispatch(window, { type: "agentEnd" });
+    expect(grokking(doc)).toBeNull();
+    // Turn 2 begins → the indicator returns.
+    dispatch(window, { type: "agentStart" });
+    expect(grokking(doc)).not.toBeNull();
+  });
+
+  it("clears on agentEnd even if the turn produced no content", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+    expect(grokking(doc)).not.toBeNull();
+    dispatch(window, { type: "agentEnd" });
+    expect(grokking(doc)).toBeNull();
+  });
+
+  it("coexists with the user's own bubble, below it (message shows as sent while waiting)", () => {
+    const { window, doc } = bootWebview();
+    // Mirrors handleSend's order: the user bubble, then agentStart.
+    dispatch(window, { type: "userMessage", text: "do the thing", chips: [] });
+    dispatch(window, { type: "agentStart" });
+
+    expect(doc.querySelectorAll(".msg.user").length).toBe(1);
+    const el = grokking(doc);
+    expect(el).not.toBeNull();
+    // The indicator sits after the user bubble in DOM order.
+    const user = doc.querySelector(".msg.user") as HTMLElement;
+    expect(user.compareDocumentPosition(el!) & 4 /* DOCUMENT_POSITION_FOLLOWING */).toBeTruthy();
+  });
+
+  it("is mutually exclusive with the plan-processing indicator (one waiting indicator at a time)", () => {
+    const { window, doc } = bootWebview();
+    // planProcessing then agentStart → Grokking wins, plan-processing is gone.
+    dispatch(window, { type: "planProcessing" });
+    expect(doc.querySelector(".plan-processing")).not.toBeNull();
+    dispatch(window, { type: "agentStart" });
+    expect(doc.querySelector(".plan-processing")).toBeNull();
+    expect(grokking(doc)).not.toBeNull();
+    // …and the reverse: planProcessing replaces Grokking.
+    dispatch(window, { type: "planProcessing" });
+    expect(grokking(doc)).toBeNull();
+    expect(doc.querySelector(".plan-processing")).not.toBeNull();
+  });
+
+  it("does not duplicate when agentStart fires twice without content", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "agentStart" });
+    dispatch(window, { type: "agentStart" });
+    expect(doc.querySelectorAll(".grokking").length).toBe(1);
   });
 });
 

@@ -138,6 +138,36 @@ The active editor is added as an **implicit** chip automatically (toggle with `g
 </details>
 
 <details>
+<summary><strong>Agent Dashboard</strong> — run several sessions at once, switch instantly, see which need you</summary>
+
+Keep more than one session **alive at the same time**. Start a new session with **+** while another is mid-turn, and switch between them from the history dropdown — the one you leave keeps running in the background (mid-turn, mid-approval, anything), and switching back replays its exact state with **no reload**. Picking a session that isn't live anymore loads it from history as before.
+
+Each row in the dropdown shows a **status dot** so you can see what every session is doing without opening it. It's **gray** at rest and only lights up when there's something to know:
+
+| Dot | Meaning |
+|---|---|
+| 🔵 Blue | Working — a turn is in flight |
+| 🟡 Yellow | Needs you — a permission, question, or plan is waiting |
+| 🟢 Green | Finished, with output you **haven't opened yet** |
+| 🔴 Red | Finished with an error you haven't opened |
+| ⚪ Gray | At rest — idle, already read, or not loaded |
+
+The green/red dot is an **unread** badge: it appears when a session finishes while you're looking at *another* one, and clears the moment you open it. It's persisted, so it survives idle cleanup **and** a VS Code restart — fire off a few agents, walk away, and the green dots are exactly the sessions with results waiting.
+
+To keep a pile of background sessions from each pinning a live process, a session left untouched for an hour (or beyond ~8 live) is quietly shut down — never one that's working or waiting on you — and reloads from history on click, losing nothing.
+
+</details>
+
+<details>
+<summary><strong>Instant feedback</strong> — a <em>Grokking…</em> indicator the moment you send, with no startup pause</summary>
+
+Every message you send shows an animated **Grokking…** placeholder immediately, so there's always feedback that Grok received it — it's replaced in place the instant the first thought, reply, or tool action streams in.
+
+There's also no longer a long silent pause before that first response. The extension primes each new session with a hidden plan-mode instruction; that primer now runs **eagerly in the background** the moment the session goes live (and on resume, and after `/compact`) instead of sitting in front of your first message — so it's almost always finished before you hit send. If you *are* quick, your message appears right away and is released the instant the primer settles. The primer text was also slimmed down so it completes in a beat rather than wandering off to read your workspace first.
+
+</details>
+
+<details>
 <summary><strong>Session history</strong> — resume, rename, or delete any past session</summary>
 
 The clock icon lists every session the CLI saved for this project (`~/.grok/sessions/<urlencoded-cwd>/`). Click a row to resume — the extension calls `session/load` and Grok replays the conversation, with inline images, plans, and reasoning intact. Hover to rename (pencil) or delete (trash); names default to the first message. Renames live in VS Code's `globalState` and never touch Grok's own files.
@@ -261,7 +291,7 @@ Grok's own **slash commands** (`/imagine`, `/compact`, …) autocomplete in the 
 
 The extension is intentionally **thin**: it speaks JSON-RPC over `grok agent stdio` and renders the results. Grok owns sessions, memory, MCP, models, and tool execution; the extension mediates file reads/writes, terminal requests, diff previews, the webview UI — and **Plan Mode**.
 
-Plan Mode is the one place the extension is *not* thin. The CLI's `exit_plan_mode` is unreliable (it reports "approved" to any reply), so the extension enforces planning itself: a **gate** blocks workspace writes and non-read-only commands until you approve, and a hidden **primer** message teaches Grok to read your real verdict (`[Plan approved]` / `[Plan rejected]` / `[Plan cancelled]`) from your next message.
+Plan Mode is the one place the extension is *not* thin. The CLI's `exit_plan_mode` is unreliable (it reports "approved" to any reply), so the extension enforces planning itself: a **gate** blocks workspace writes and non-read-only commands until you approve, and a hidden **primer** message teaches Grok to read your real verdict (`[Plan approved]` / `[Plan rejected]` / `[Plan cancelled]`) from your next message. The primer is fired **eagerly and silently** the instant a session goes live (not in front of your first prompt), and is kept lean so it doesn't add a startup pause — your first real message simply waits, in code, for the silent primer turn to finish (Grok runs one turn at a time) and is released the moment it does.
 
 Full diagram, message flow, module map, and design notes: **[docs/architecture.md](docs/architecture.md)**.
 

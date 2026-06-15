@@ -25,6 +25,12 @@ export interface SessionMetaOverride {
    *  the resume view can render each card right after that message instead of dumping all the
    *  plan cards at the bottom of the restored conversation. */
   plans?: { text: string; verdict: "approved" | "rejected" | "abandoned"; afterUserMessage?: number }[];
+  /** Dashboard "unread" badge: a turn finished while this session wasn't focused and
+   *  hasn't been opened since. Drives the green/red dot; cleared on open. Persisted
+   *  (not tied to the live process) so the badge survives reaping and a reload. */
+  unread?: boolean;
+  /** The unread turn ended in an error (red dot instead of green). */
+  unreadError?: boolean;
 }
 export type SessionMetaOverrides = Record<string, SessionMetaOverride>;
 

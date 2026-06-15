@@ -29,12 +29,13 @@ if [ -z "$vsix" ]; then
     cd "$repo_root"
     [ -d node_modules ] || npm install
     npm run package
-    vsix=$(ls "$repo_root"/*.vsix | head -n1)
+    vsix=$(ls -t "$repo_root"/*.vsix | head -n1)
 fi
 [ -f "$vsix" ] || { echo "vsix not found: $vsix" >&2; exit 1; }
 
 code=$(find_code_cli)
 echo "Installing $vsix via $code"
-"$code" --install-extension "$vsix"
+# --force so a same-version reinstall actually overwrites the installed files
+"$code" --install-extension "$vsix" --force
 echo
 echo "Done. Reload VS Code (Ctrl+Shift+P -> 'Developer: Reload Window') and click the Grok icon."
