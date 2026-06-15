@@ -174,6 +174,7 @@
     clock: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
     plus: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`,
     upload: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg>`,
+    download: `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg>`,
     trash: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>`,
     pencil: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>`,
     mic: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`,
@@ -249,33 +250,103 @@
 
   const { looksLikeFileRef, formatRelativeTime, modelDisplayName, nextMicState, trailingSendPhrase, buildQuestionAnswers, isSubagentToolCall, subagentLabel, shouldStickToBottom, splitMath, stripUnsupportedTex } = globalThis.GrokWebviewHelpers;
 
-  // Render one LaTeX span to HTML via the vendored KaTeX (loaded before this
-  // script as a global). throwOnError:false makes KaTeX emit a red inline error
-  // node instead of throwing, so a single bad expression never blanks the whole
-  // message. If KaTeX isn't present (e.g. happy-dom unit tests), fall back to the
-  // escaped raw TeX so the text is at least readable.
-  function renderMath(latex, display) {
-    const k = globalThis.katex;
-    const src = stripUnsupportedTex(latex == null ? "" : String(latex)).trim();
-    if (k && typeof k.renderToString === "function") {
-      try {
-        return k.renderToString(src, { displayMode: !!display, throwOnError: false });
-      } catch (_) {
-        // fall through to the raw fallback
-      }
+  function escapeAttr(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Hover-overlay markup shared by display math and rendered mermaid diagrams:
+  // Copy the source, Download as PNG/SVG, or Open as PNG. The host element carries
+  // the source in data-export-src and the kind in data-export-kind; clicks are
+  // handled by delegation (see the .expr-btn branch in the click listener), so this
+  // can be plain HTML re-created on every streaming frame without leaking handlers.
+  function exprActionsHtml(kind) {
+    const label = kind === "mermaid" ? "diagram" : "LaTeX";
+    return (
+      `<span class="expr-actions" contenteditable="false">` +
+        `<button class="expr-btn" type="button" data-expr-act="copy" title="Copy ${label}">${ICON.copy}</button>` +
+        `<button class="expr-btn" type="button" data-expr-act="download" title="Download as PNG / SVG">${ICON.download}</button>` +
+        `<button class="expr-btn" type="button" data-expr-act="open" title="Open as PNG">${ICON.file}</button>` +
+      `</span>`
+    );
+  }
+
+  // Render one LaTeX span to an SVG string via the vendored MathJax (loaded
+  // before this script as a global). MathJax outputs self-contained SVG, which
+  // lets us export equations later; on a parse error it renders an <merror> node
+  // rather than throwing, so one bad expression never blanks the message. Until
+  // MathJax's async startup completes — or if it never loads (happy-dom unit
+  // tests) — fall back to the escaped raw TeX so the text is at least readable.
+  let mathReady = false;
+
+  function initMathJax() {
+    const MJ = globalThis.MathJax;
+    if (!MJ) return;
+    if (typeof MJ.tex2svg === "function") { mathReady = true; return; }
+    // tex2svg is wired up by MathJax's startup; gate on its promise, then upgrade
+    // any math that already rendered as a raw fallback before startup finished.
+    const p = MJ.startup && MJ.startup.promise;
+    if (p && typeof p.then === "function") {
+      p.then(() => { mathReady = true; upgradeMathInDom(); }).catch(() => {});
     }
+  }
+
+  function rawMath(src, display) {
     const esc = escapeHtml(src);
     return display
       ? `<span class="math-raw math-display">${esc}</span>`
       : `<span class="math-raw">${esc}</span>`;
   }
 
+  function renderMath(latex, display) {
+    const orig = (latex == null ? "" : String(latex)).trim();
+    const src = stripUnsupportedTex(orig);
+    const MJ = globalThis.MathJax;
+    let inner = null;
+    if (mathReady && MJ && typeof MJ.tex2svg === "function") {
+      try {
+        const node = MJ.tex2svg(src, { display: !!display });
+        if (node && node.outerHTML) inner = node.outerHTML;
+      } catch (_) {
+        // fall through to the raw fallback
+      }
+    }
+    if (inner == null) inner = rawMath(src, display);
+    // Inline math flows in the text with no chrome. Display math becomes an export
+    // host carrying the original TeX (for Copy) and the hover actions. The dm block
+    // branch in renderMarkdown emits the placeholder, and .math-export is block.
+    if (!display) return inner;
+    return `<span class="math-export" data-export-kind="latex" data-export-src="${escapeAttr(orig)}">` +
+      inner + exprActionsHtml("latex") + `</span>`;
+  }
+
+  // MathJax startup is async, so math rendered during page boot (welcome screen,
+  // a restored session) may have landed as raw fallback. Once startup resolves,
+  // re-typeset those in place: display math from its host's stored TeX (replacing
+  // the whole .math-export host so we don't double-wrap), inline from its text.
+  function upgradeMathInDom() {
+    document.querySelectorAll(".math-raw").forEach((span) => {
+      const display = span.classList.contains("math-display");
+      // Display fallbacks live inside a .math-export host — replace the host (and
+      // re-render from its faithful, un-stripped TeX), not just the inner span.
+      const host = display ? (span.closest(".math-export") || span) : span;
+      const srcAttr = host.getAttribute && host.getAttribute("data-export-src");
+      const src = (display && srcAttr != null) ? srcAttr : span.textContent;
+      const tmp = document.createElement("div");
+      tmp.innerHTML = renderMath(src, display);
+      const node = tmp.firstChild;
+      if (node && host.parentNode) host.parentNode.replaceChild(node, host);
+    });
+  }
+
   // ---------- mermaid diagrams ----------
   // Grok emits ```mermaid fenced blocks. renderMarkdown turns each into a
   // .mermaid-block placeholder (showing the source as a fallback code block);
   // this pass renders it to SVG with the vendored mermaid lib. mermaid.render is
-  // async and needs the live DOM (it measures text), so unlike KaTeX we can't do
-  // it inline in renderMarkdown — we post-process the inserted element instead.
+  // async and needs the live DOM (it measures text), so unlike the synchronous
+  // math render we can't do it inline in renderMarkdown — we post-process the
+  // inserted element instead.
   //
   // The streaming agent bubble re-runs renderMarkdown (and rebuilds the DOM) on
   // every animation frame, so the SVG is destroyed and the placeholder recreated
@@ -312,6 +383,17 @@
     return (codeEl ? codeEl.textContent : "").trim();
   }
 
+  // Swap the rendered SVG into a mermaid block and turn it into an export host:
+  // retain the source (for Copy) and add the Copy/Download/Open hover actions. The
+  // streaming re-render rebuilds the block (with its .mermaid-src fallback) each
+  // frame, so this re-runs per frame from the cache — keep it idempotent.
+  function decorateMermaid(block, svg, src) {
+    block.innerHTML = svg + exprActionsHtml("mermaid");
+    block.setAttribute("data-export-kind", "mermaid");
+    block.setAttribute("data-export-src", src);
+    block.setAttribute("data-mermaid-state", "done");
+  }
+
   // Replace every still-unrendered placeholder whose source matches `src` with the
   // cached SVG. Scans the live document because the streaming re-render may have
   // swapped out the element that originally kicked off the render.
@@ -321,8 +403,7 @@
     document.querySelectorAll(".mermaid-block").forEach((block) => {
       if (block.getAttribute("data-mermaid-state") === "done") return;
       if (mermaidSourceOf(block) === src) {
-        block.innerHTML = svg;
-        block.setAttribute("data-mermaid-state", "done");
+        decorateMermaid(block, svg, src);
       }
     });
   }
@@ -339,7 +420,7 @@
       if (!src) return;
       if (mermaidSvgCache.has(src)) {
         const svg = mermaidSvgCache.get(src);
-        if (svg) { block.innerHTML = svg; block.setAttribute("data-mermaid-state", "done"); }
+        if (svg) decorateMermaid(block, svg, src);
         return; // null → render failed earlier; keep the source fallback
       }
       if (mermaidInFlight.has(src)) return; // already rendering; the cache will fill in shortly
@@ -354,6 +435,138 @@
           applyCachedMermaid(src);
         });
     });
+  }
+
+  // ---------- math / diagram export ----------
+  // Display math and rendered mermaid both end up as a self-contained <svg> in an
+  // export host (.math-export / .mermaid-block) carrying the source. From the hover
+  // actions we Copy that source, or render the SVG to a file: SVG verbatim, or a
+  // PNG rasterized via canvas. Exports match the VS Code theme (sidebar background +
+  // foreground) so a saved image looks like what's on screen — a dark diagram stays
+  // dark — and so math (currentColor) resolves to the theme text color rather than
+  // rasterizing as the default black on a transparent background.
+
+  function canRasterize() {
+    try { return !!document.createElement("canvas").getContext("2d"); } catch (_) { return false; }
+  }
+
+  function themeVar(name, fallback) {
+    try {
+      const v = getComputedStyle(document.body).getPropertyValue(name).trim();
+      return v || fallback;
+    } catch (_) { return fallback; }
+  }
+
+  // The on-screen surface colors, so exports are WYSIWYG. The chat sits on
+  // --vscode-sideBar-background with --vscode-foreground text (see chat.css).
+  function exportColors() {
+    return {
+      bg: themeVar("--vscode-sideBar-background", "#1e1e1e"),
+      fg: themeVar("--vscode-foreground", "#cccccc"),
+    };
+  }
+
+  // Clone the on-screen SVG into a standalone one. `color` resolves the math
+  // currentColor (pass null to leave mermaid's own palette alone); `bg` paints a
+  // solid background, or null/"" for transparent (reusable on any surface).
+  function themedSvg(svgEl, color, bg) {
+    const clone = svgEl.cloneNode(true);
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    let style = clone.getAttribute("style") || "";
+    if (color) style += `;color:${color}`;
+    if (bg) style += `;background:${bg}`;
+    clone.setAttribute("style", style);
+    return new XMLSerializer().serializeToString(clone);
+  }
+
+  // Re-render a mermaid diagram with a specific built-in theme for export, so a
+  // "for light background" file gets mermaid's light palette instead of the
+  // on-screen dark one. The %%{init}%% directive themes just this render without
+  // touching the global config. Transparent bg; falls back to the on-screen SVG.
+  async function mermaidThemedSvg(src, theme, fallbackEl) {
+    const m = globalThis.mermaid;
+    if (m && typeof m.render === "function" && src) {
+      try {
+        const id = "grok-mmd-exp-" + (mermaidIdSeq++);
+        const res = await m.render(id, `%%{init: {'theme':'${theme}'}}%%\n` + src);
+        if (res && res.svg) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = res.svg;
+          const el = tmp.querySelector("svg");
+          if (el) return themedSvg(el, null, null);
+        }
+      } catch (_) { /* fall back to the on-screen render */ }
+    }
+    return fallbackEl ? themedSvg(fallbackEl, null, null) : "";
+  }
+
+  // Rasterize an SVG string to a PNG data URL via an offscreen canvas (theme bg).
+  function svgToPng(svgStr, w, h, scale, bg) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = bg;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/png"));
+        } catch (e) { reject(e); }
+      };
+      img.onerror = reject;
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgStr);
+    });
+  }
+
+  function copyExprSource(src, btn) {
+    navigator.clipboard.writeText(src || "").then(() => {
+      const prev = btn.innerHTML;
+      btn.innerHTML = ICON.check;
+      btn.classList.add("copied");
+      setTimeout(() => { btn.innerHTML = prev; btn.classList.remove("copied"); }, 1500);
+    });
+  }
+
+  // Build the export payload and hand it to the host. "open" → a WYSIWYG PNG (VS
+  // Code theme background, like on screen). "download" → that same PNG plus two
+  // transparent SVGs (light-ink for dark backgrounds, dark-ink for light ones);
+  // the host quick-picks which to save. Math recolors via currentColor; mermaid is
+  // re-rendered in each theme since its palette is baked into the SVG.
+  async function exportExpr(host, action) {
+    const svgEl = host.querySelector("svg");
+    if (!svgEl) return;
+    const kind = host.getAttribute("data-export-kind") || "latex";
+    const colors = exportColors();
+    const rect = svgEl.getBoundingClientRect();
+    const w = rect.width || 320, h = rect.height || 100;
+
+    // PNG always keeps the VS Code theme background — what you see in the sidebar.
+    const wysiwyg = themedSvg(svgEl, colors.fg, colors.bg);
+    let png = null;
+    if (canRasterize()) {
+      try { png = await svgToPng(wysiwyg, w, h, 3, colors.bg); } catch (_) { png = null; }
+    }
+
+    if (action === "open") {
+      vscode.postMessage({ type: "exportExpr", action, kind, svg: wysiwyg, png });
+      return;
+    }
+
+    // Download: also produce transparent SVGs for dark and light backgrounds.
+    let svgDark, svgLight;
+    if (kind === "mermaid") {
+      const src = host.getAttribute("data-export-src") || "";
+      svgDark = await mermaidThemedSvg(src, "dark", svgEl);
+      svgLight = await mermaidThemedSvg(src, "default", svgEl);
+    } else {
+      svgDark = themedSvg(svgEl, "#e8e8e8", null);  // light ink for a dark surface
+      svgLight = themedSvg(svgEl, "#1f1f1f", null); // dark ink for a light surface
+    }
+    const current = document.body.classList.contains("vscode-light") ? "light" : "dark";
+    vscode.postMessage({ type: "exportExpr", action, kind, png, svgDark, svgLight, current });
   }
 
   function renderDiffCode(code) {
@@ -2816,6 +3029,19 @@
   addPopover.addEventListener("click", (e) => e.stopPropagation());
   historyPopover.addEventListener("click", (e) => e.stopPropagation());
   document.addEventListener("click", (e) => {
+    // Math / mermaid export actions (Copy source, Download as PNG/SVG, Open as PNG).
+    const exprBtn = e.target.closest(".expr-btn");
+    if (exprBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const host = exprBtn.closest(".math-export, .mermaid-block");
+      if (host) {
+        const act = exprBtn.getAttribute("data-expr-act");
+        if (act === "copy") copyExprSource(host.getAttribute("data-export-src"), exprBtn);
+        else if (act === "download" || act === "open") void exportExpr(host, act);
+      }
+      return;
+    }
     const copyBtn = e.target.closest(".code-copy-btn");
     if (copyBtn) {
       e.preventDefault();
@@ -2944,5 +3170,6 @@
   });
 
   initMermaid();
+  initMathJax();
   vscode.postMessage({ type: "ready" });
 })();

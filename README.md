@@ -154,7 +154,7 @@ Every action Grok takes appears in chat — a single flat row ("Read sidebar.ts 
 <details>
 <summary><strong>Math &amp; LaTeX rendering</strong> — equations render as math, not raw TeX</summary>
 
-When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and environments like `\begin{pmatrix}` matrices, `cases`, integrals, sums, and Greek — the chat renders it as real typeset math via [KaTeX](https://katex.org), vendored into the extension so it works **offline with no network**. Display equations get their own block with horizontal scroll so a wide matrix doesn't overflow the narrow sidebar; a malformed expression shows a small inline error instead of blanking the message, and `\label{…}` (which KaTeX can't cross-reference) is stripped so it never paints a red error into an otherwise-fine equation. Bare `$…$` is intentionally **not** a delimiter — it would mangle prose like "it costs $5 and then $10".
+When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and environments like `\begin{pmatrix}` matrices, `cases`, integrals, sums, and Greek — the chat renders it as real typeset math via [MathJax](https://www.mathjax.org), vendored into the extension so it works **offline with no network**. Inline math sits on the text baseline in your editor's text color; display equations get their own centered block with horizontal scroll so a wide matrix doesn't overflow the narrow sidebar. A malformed expression shows a small inline error instead of blanking the message. **Hover a display equation** for actions: copy its LaTeX source, or export it as a PNG (your theme's background) or a transparent SVG tuned for a light or dark background. Bare `$…$` is intentionally **not** a delimiter — it would mangle prose like "it costs $5 and then $10".
 
 ![LaTeX expressions rendered as typeset math](docs/screenshots/v1.4.5%20LaTeX%20expressions.png)
 
@@ -163,7 +163,7 @@ When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and enviro
 <details>
 <summary><strong>Mermaid diagrams</strong> — flowcharts and sequence diagrams render as diagrams</summary>
 
-When Grok answers with a ` ```mermaid ` block — flowcharts, sequence and state diagrams, git graphs, class and ER diagrams, and more — the chat renders it as a real diagram via [Mermaid](https://mermaid.js.org), vendored into the extension so it works **offline with no network**. Diagrams are themed to match your VS Code color theme and scroll horizontally so a wide flowchart doesn't overflow the narrow sidebar. If a diagram is still streaming or turns out to be malformed, the readable diagram source is shown instead — you never lose the content.
+When Grok answers with a ` ```mermaid ` block — flowcharts, sequence and state diagrams, git graphs, class and ER diagrams, and more — the chat renders it as a real diagram via [Mermaid](https://mermaid.js.org), vendored into the extension so it works **offline with no network**. Diagrams are themed to match your VS Code light/dark mode and scroll horizontally so a wide flowchart doesn't overflow the narrow sidebar. **Hover a diagram** to copy its source, or export it as a PNG (your theme's background) or a transparent SVG re-themed for a light or dark background. If a diagram is still streaming or turns out to be malformed, the readable diagram source is shown instead — you never lose the content.
 
 ![Mermaid diagram rendered inline in the chat](docs/screenshots/v1.4.6%20Mermaid%20diagrams.png)
 

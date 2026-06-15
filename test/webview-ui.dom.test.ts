@@ -519,3 +519,60 @@ describe("Mermaid diagram rendering", () => {
     expect(el.textContent).toContain("flowchart TD");
   });
 });
+
+describe("math / diagram export actions (step b)", () => {
+  const renderAgent = (window: any, text: string) => {
+    dispatch(window, { type: "messageChunk", text });
+    dispatch(window, { type: "promptComplete" });
+    return window.document.querySelector(".msg.agent") as HTMLElement;
+  };
+
+  it("wraps display math in an export host with Copy/Download/Open carrying the source", () => {
+    const { window } = bootWebview();
+    const el = renderAgent(window, "Result:\n\\[E = mc^2\\]\ndone");
+    const host = el.querySelector(".math-export") as HTMLElement;
+    expect(host).not.toBeNull();
+    expect(host.getAttribute("data-export-kind")).toBe("latex");
+    expect(host.getAttribute("data-export-src")).toBe("E = mc^2");
+    const acts = [...host.querySelectorAll(".expr-btn")].map((b) => b.getAttribute("data-expr-act"));
+    expect(acts).toEqual(["copy", "download", "open"]);
+  });
+
+  it("does NOT add export actions to inline math", () => {
+    const { window } = bootWebview();
+    const el = renderAgent(window, "area is \\(\\pi r^2\\) ok");
+    expect(el.querySelector(".math-export")).toBeNull();
+    expect(el.querySelector(".expr-actions")).toBeNull();
+  });
+
+  it("Copy writes the original source TeX to the clipboard", () => {
+    const { window } = bootWebview();
+    let copied: string | null = null;
+    Object.defineProperty((window as any).navigator, "clipboard", {
+      value: { writeText: (t: string) => { copied = t; return Promise.resolve(); } },
+      configurable: true,
+    });
+    const el = renderAgent(window, "\\[a^2 + b^2 = c^2\\]");
+    const copyBtn = el.querySelector('.expr-btn[data-expr-act="copy"]') as HTMLElement;
+    click(window, copyBtn);
+    expect(copied).toBe("a^2 + b^2 = c^2");
+  });
+
+  it("Download posts an exportExpr message with transparent dark + light SVG variants", () => {
+    const { window, posted } = bootWebview();
+    const el = renderAgent(window, "\\[x^2\\]");
+    const host = el.querySelector(".math-export") as HTMLElement;
+    // happy-dom has no MathJax, so stand in a minimal SVG for the rendered output.
+    const svg = (window as any).document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    host.insertBefore(svg, host.firstChild);
+    click(window, host.querySelector('.expr-btn[data-expr-act="download"]') as HTMLElement);
+    const msg = posted.find((p) => p.type === "exportExpr");
+    expect(msg).toBeTruthy();
+    expect(msg!.action).toBe("download");
+    expect(msg!.kind).toBe("latex");
+    // two SVG variants for the host to quick-pick between; neither paints a bg.
+    expect(typeof msg!.svgDark).toBe("string");
+    expect(typeof msg!.svgLight).toBe("string");
+    expect(msg!.svgDark as string).not.toContain("background:");
+  });
+});

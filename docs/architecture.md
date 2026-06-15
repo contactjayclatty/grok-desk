@@ -140,19 +140,31 @@ The full pedagogical write-up lives in
   image-vs-video by extension, and serves it to the webview via `asWebviewUri`
   (streamed from disk) so even a multi-MB video renders. See
   [research/image-generation.md](../research/image-generation.md).
-- **Math renders via vendored KaTeX, extracted before HTML-escaping.** Grok
+- **Math renders via vendored MathJax (SVG), extracted before HTML-escaping.** Grok
   answers with TeX (inline `\(…\)`, display `\[…\]`, `\begin{pmatrix}` matrices).
   The pure `splitMath` pulls math spans out *before* the markdown pass escapes
   HTML — so backslashes and braces survive into placeholders, mirroring the
   code-block/table extraction — and `renderMath` in `chat.js` renders each span
-  with [KaTeX](https://katex.org) (`media/katex/`, woff2-only fonts, no network,
-  `throwOnError:false`). `stripUnsupportedTex` drops `\label{…}` first (KaTeX has
-  no `\ref`/`\eqref`, so it would paint a red error; `\label` is invisible in real
-  LaTeX anyway). Single `$…$` is deliberately not a delimiter — it false-matches
-  prose currency.
+  with [MathJax](https://www.mathjax.org) (`media/mathjax/tex-svg-full.js`, a
+  self-contained ~2.3 MB IIFE, no network) via `MathJax.tex2svg` (synchronous once
+  startup resolves; raw-TeX fallback + an `upgradeMathInDom` pass until then).
+  `enableAssistiveMml:false` stops a hidden MathML copy from rendering as a visible
+  duplicate, and we supply `mjx-container[display="true"]{display:block}` ourselves
+  since manual `tex2svg` skips MathJax's injected stylesheet. Single `$…$` is
+  deliberately not a delimiter — it false-matches prose currency. *(v1.4.7 replaced
+  KaTeX with MathJax, mainly so every equation is an exportable self-contained SVG.)*
+- **Display math + Mermaid diagrams export to PNG/SVG.** Both end up as a
+  self-contained `<svg>` in an export host (`.math-export` / `.mermaid-block`)
+  carrying the source. A hover overlay (delegated `.expr-btn` handler, mirroring the
+  generated-image `buildMediaActions`) offers Copy (the source), Download, and Open.
+  Download quick-picks a **PNG** (canvas-rasterized with the VS Code theme
+  background — WYSIWYG) or a **transparent SVG** for a dark/light background (math
+  recolors `currentColor`; mermaid re-renders per theme via a `%%{init}%%`
+  directive). The host (`sidebar.ts exportExpr`) runs the quick-pick + save dialog;
+  Open writes the PNG to `globalStorageUri/exports/` and previews it.
 - **Mermaid renders async, as a post-pass over the inserted DOM.** Grok answers
   with ` ```mermaid ` fences (flowcharts, sequence/state diagrams, git graphs, …).
-  Unlike KaTeX's synchronous string render, `mermaid.render` is async and needs
+  Unlike the synchronous math render, `mermaid.render` is async and needs
   the live DOM (it measures text to lay out nodes), so `renderMarkdown` only turns
   the fence into a `.mermaid-block` placeholder (carrying the source as a readable
   fallback code block) and `renderMermaidIn` in `chat.js` swaps in the SVG

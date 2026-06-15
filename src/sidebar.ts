@@ -47,6 +47,7 @@ type WebviewMsg =
   | { type: "openFile"; path: string }
   | { type: "openUrl"; url: string }
   | { type: "openDiff"; path: string; oldText: string; newText: string }
+  | { type: "exportExpr"; action: string; kind: string; current?: string; svg?: string; png?: string; svgDark?: string; svgLight?: string }
   | { type: "setEffort"; level: string }
   | { type: "openGlobalConfig" }
   | { type: "openProjectConfig" }
@@ -632,6 +633,75 @@ See design doc for the full state machine diagram.`;
       return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Save or open a math/diagram export from the webview. "open" writes the WYSIWYG
+   * PNG into extension storage and opens it in VS Code's image preview. "download"
+   * offers a quick-pick — PNG (VS Code theme background) or a transparent SVG tuned
+   * for a dark or light background — then a save dialog. The webview pre-renders all
+   * variants (the SVG light/dark differ: math recolors, mermaid re-themes).
+   */
+  private async exportExpr(msg: {
+    action: string;
+    kind: string;
+    current?: string;
+    svg?: string;
+    png?: string;
+    svgDark?: string;
+    svgLight?: string;
+  }): Promise<void> {
+    try {
+      const base = msg.kind === "mermaid" ? "diagram" : "equation";
+      const toBytes = (png?: string) =>
+        png ? Buffer.from(png.split(",")[1] ?? "", "base64") : null;
+
+      if (msg.action === "open") {
+        const pngBytes = toBytes(msg.png);
+        const dir = path.join(this.context.globalStorageUri.fsPath, "exports");
+        fs.mkdirSync(dir, { recursive: true });
+        const stamp = Date.now();
+        const file = path.join(dir, `${base}-${stamp}.${pngBytes ? "png" : "svg"}`);
+        fs.writeFileSync(file, pngBytes ?? (msg.svg ?? ""), pngBytes ? undefined : "utf8");
+        await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(file));
+        return;
+      }
+
+      // download: let the user pick the format/variant (two SVG variants share the
+      // .svg extension, so a save-dialog filter can't distinguish them — quick-pick).
+      const mark = (which: string) => (msg.current === which ? "  (current theme)" : "");
+      const items = [
+        { label: "PNG", description: "raster, VS Code theme background", fmt: "png" },
+        { label: `SVG — for dark background${mark("dark")}`, description: "transparent, light ink", fmt: "svgDark" },
+        { label: `SVG — for light background${mark("light")}`, description: "transparent, dark ink", fmt: "svgLight" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: `Export ${base} as…`,
+      });
+      if (!pick) return;
+
+      const ext = pick.fmt === "png" ? "png" : "svg";
+      const defaultName = `${base}.${ext}`;
+      const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const defaultUri = folder
+        ? vscode.Uri.joinPath(folder, defaultName)
+        : vscode.Uri.file(defaultName);
+      const filters: Record<string, string[]> =
+        ext === "png" ? { "PNG image": ["png"] } : { "SVG image": ["svg"] };
+      const target = await vscode.window.showSaveDialog({ defaultUri, filters });
+      if (!target) return;
+
+      if (pick.fmt === "png") {
+        const pngBytes = toBytes(msg.png);
+        fs.writeFileSync(target.fsPath, pngBytes ?? Buffer.from(msg.svgDark ?? "", "utf8"));
+      } else {
+        const svg = pick.fmt === "svgDark" ? msg.svgDark : msg.svgLight;
+        fs.writeFileSync(target.fsPath, svg ?? "", "utf8");
+      }
+    } catch (e) {
+      this.output.appendLine(`[export] failed: ${(e as Error).message}`);
+      void vscode.window.showErrorMessage(`Export failed: ${(e as Error).message}`);
     }
   }
 
@@ -1246,6 +1316,9 @@ See design doc for the full state machine diagram.`;
         break;
       case "openDiff":
         await this.openDiffEditor(msg.path, msg.oldText, msg.newText);
+        break;
+      case "exportExpr":
+        await this.exportExpr(msg);
         break;
       case "dropFile":
         this.addDroppedFile(msg.path, msg.shift);
@@ -2003,7 +2076,6 @@ See design doc for the full state machine diagram.`;
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; media-src ${webview.cspSource} data:; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
-<link rel="stylesheet" href="${mediaUri("katex/katex.min.css")}" />
 <link rel="stylesheet" href="${mediaUri("chat.css")}" />
 </head>
 <body>
@@ -2054,7 +2126,25 @@ See design doc for the full state machine diagram.`;
     <div id="slash-popover" class="slash-popover" hidden></div>
   </footer>
 
-  <script nonce="${nonce}" src="${mediaUri("katex/katex.min.js")}"></script>
+  <script nonce="${nonce}">
+    // Configure MathJax before its bundle loads. We drive typesetting manually
+    // via MathJax.tex2svg (startup.typeset:false), so it never scans the page.
+    // svg.fontCache:'local' makes each equation's SVG embed its own glyph paths
+    // (self-contained — required for the upcoming SVG/PNG export). enableMenu:false
+    // drops the right-click menu (its assets would need network/CSP exceptions).
+    // enableAssistiveMml:false is critical: by default MathJax appends a hidden
+    // <mjx-assistive-mml> MathML copy of every equation, normally hidden by CSS
+    // that MathJax injects when it manages the page. We drive it manually via
+    // tex2svg + outerHTML, so that hiding CSS isn't applied and Chromium renders
+    // the MathML natively — a visible *second* copy of every equation.
+    window.MathJax = {
+      tex: { processEnvironments: true, processRefs: true },
+      svg: { fontCache: "local" },
+      options: { enableMenu: false, enableAssistiveMml: false },
+      startup: { typeset: false }
+    };
+  </script>
+  <script nonce="${nonce}" src="${mediaUri("mathjax/tex-svg-full.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("mermaid/mermaid.min.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("webview-helpers.js")}"></script>
   <script nonce="${nonce}" src="${mediaUri("chat.js")}"></script>

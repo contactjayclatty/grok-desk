@@ -1502,21 +1502,29 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   color: var(--vscode-descriptionForeground);
 }
 
-/* ---- LaTeX / KaTeX math ---- */
-/* Inherit the chat color so equations match surrounding prose, and tame
-   KaTeX's default 1.21em so inline math sits at body size. */
-.katex { font-size: 1.05em; color: inherit; }
-/* Display math gets its own block; allow horizontal scroll so a wide matrix or
-   long equation doesn't blow out the narrow sidebar width. */
-.katex-display {
-  margin: 0.5em 0;
+/* ---- LaTeX math (MathJax SVG) ---- */
+/* MathJax emits <mjx-container> wrapping an inline SVG whose fill is currentColor,
+   so equations already match surrounding prose. */
+mjx-container { color: inherit; }
+/* Safety net for the assistive-MathML duplicate (also disabled in config): if any
+   <mjx-assistive-mml> slips through, hide it so Chromium doesn't render a second,
+   native-MathML copy of the equation next to the SVG. */
+mjx-container mjx-assistive-mml { display: none !important; }
+/* Display math (\[ … \]) stands alone on its own line, centered, with horizontal
+   scroll so a wide matrix doesn't blow out the narrow sidebar. We set display:block
+   ourselves because MathJax's own stylesheet — which normally does this — isn't
+   applied when we render manually via tex2svg. Inline \( … \) keeps MathJax's
+   inline `vertical-align` (set on the SVG itself) so it sits on the text baseline. */
+mjx-container[display="true"] {
+  display: block;
+  text-align: center;
+  margin: 0.6em 0;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 2px;
 }
-.katex-display > .katex { font-size: 1.1em; }
-/* Fallback when KaTeX can't render (or isn't loaded): show the raw TeX in a
-   monospace tint rather than blanking it. */
+/* Fallback when MathJax can't render (or hasn't finished starting up): show the
+   raw TeX in a monospace tint rather than blanking it. */
 .math-raw {
   font-family: var(--vscode-editor-font-family, monospace);
   color: var(--vscode-textPreformat-foreground);
@@ -1541,3 +1549,41 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
   max-width: 100%;
   height: auto;
 }
+
+/* ---- Export hover actions (display math + rendered mermaid) ---- */
+/* A Copy / Download / Open overlay pinned top-right, revealed on hover — mirrors
+   the generated-image media actions. The host (.math-export / .mermaid-block)
+   carries data-export-src + data-export-kind for the delegated click handler. */
+.math-export { position: relative; display: block; }
+.mermaid-block[data-mermaid-state="done"] { position: relative; }
+.expr-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 2;
+}
+.math-export:hover .expr-actions,
+.mermaid-block[data-mermaid-state="done"]:hover .expr-actions,
+.expr-actions:focus-within { opacity: 1; }
+.expr-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.expr-btn:hover,
+.expr-btn:focus-visible {
+  background: color-mix(in srgb, var(--vscode-foreground) 12%, var(--vscode-editorWidget-background, var(--vscode-editor-background)));
+  color: var(--vscode-foreground);
+}
+.expr-btn.copied { color: var(--vscode-charts-green, #4ec9b0); }
