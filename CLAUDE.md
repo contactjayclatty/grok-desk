@@ -139,3 +139,4 @@ Don't skip the tag/release (or the vsix asset) on a release push. (A pure mid-de
 - 414 tests is the floor — every PR should keep that green. All tests are grok-free (no binary spawn); grok-dependent probes live in `research/*.cjs` and are run manually, never by `npm test` or CI
 - **Rebuilding clears older `.vsix` first** — `npm run package` (and the install/release scripts) delete stale `grok-vscode-phuryn-*.vsix` before building, so only the current version is on disk. After any doc or code change, rebuild + reinstall so the installed extension's bundled docs are current.
 - **Version bumps are user-initiated.** Iterate at the current version (rebuild the same vsix and reinstall locally) until the user says to bump and publish. Don't bump `package.json` on your own.
+- **Sign GitHub comments.** Every GitHub issue/PR comment posted on the user's behalf ends with a final line: `_Written by Pawel's agent_` (italic, on its own line).
