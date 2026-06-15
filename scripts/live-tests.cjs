@@ -26,6 +26,7 @@
  *   npm run test:live -- --quick       # skip the slow generative tests (image/video/subagent)
  *   npm run test:live -- --only=plan-mode,session-restore
  *   npm run test:live -- --skip=video-gen
+ *   npm run test:live -- --video-timeout=900000   # wait 15 min for /imagine-video
  *   GROK_BIN=/path/to/grok npm run test:live
  *
  * Exit code 0 iff no test FAILED (SKIPs — e.g. no subscription, grok chose not
@@ -72,6 +73,11 @@ const flagVal = (name) => { const f = flag(name); return f && f.includes("=") ? 
 const QUICK = !!flag("quick");
 const ONLY = (flagVal("only") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const SKIP = (flagVal("skip") || "").split(",").map((s) => s.trim()).filter(Boolean);
+// xAI video generation legitimately runs several minutes — the old 5-min cap
+// produced spurious FAILs in the release gate even though /imagine-video works
+// (grok just wasn't finished). Wait longer by default; override with
+// --video-timeout=<ms> or GROK_VIDEO_TIMEOUT_MS.
+const VIDEO_TIMEOUT_MS = Number(flagVal("video-timeout") || process.env.GROK_VIDEO_TIMEOUT_MS) || 600000;
 
 // ── A minimal ACP client over one grok child process ─────────────────────────
 // Spawns `grok agent stdio`, frames newline-delimited JSON-RPC, auto-answers
@@ -343,7 +349,7 @@ async function testVideo() {
     assert(ns.result && ns.result.sessionId, "session/new failed");
     const pr = await withTimeout(
       acp.send("session/prompt", { sessionId: ns.result.sessionId, prompt: [{ type: "text", text: "/imagine-video a red cube slowly rotating on a white background" }] }),
-      300000, "/imagine-video");
+      VIDEO_TIMEOUT_MS, "/imagine-video");
     if (pr.error) throw new Skip("/imagine-video errored (likely no subscription): " + JSON.stringify(pr.error));
     const vids = acp.media.filter((m) => m.media === "video");
     if (vids.length === 0) {
