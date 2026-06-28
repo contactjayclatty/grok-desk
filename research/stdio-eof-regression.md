@@ -1,20 +1,22 @@
 # `grok agent stdio` Windows regression — stdin not read until EOF (issue #22)
 
-**Status: STILL BROKEN through Grok CLI 0.2.69** (alpha re-checked 2026-06-27). The bug
-*mutated but persists*: on **0.2.61–0.2.64** even `initialize` hangs; on **0.2.67**
-(stable) and **0.2.69** (alpha) `initialize` is answered but the *next* request
-(`session/new`) hangs — so a live session still can't start. Last fully-working build
-**0.2.60**; 0.2.65–0.2.66 and 0.2.68 never tested (treated as broken by inference).
-**Windows-only** — macOS ran the broken builds fine (see § macOS is not affected). The
-extension pins Windows back to **0.2.60** (`GROK_STDIO_DOWNGRADE_TARGET`): proactive
-range **0.2.61–0.2.67** (as shipped in 1.4.16), and the reactive net fires on an
-`initialize` *or* `session/new` startup hang for any build above 0.2.60. Tracked in
-extension issue [#22](https://github.com/phuryn/grok-build-vscode/issues/22).
+**Status: FIXED** — the fix landed in Grok CLI **0.2.71** and is now on the **stable**
+channel as **0.2.72** (verified 2026-06-28). The regression spanned **0.2.61–0.2.70**:
+0.2.61–0.2.64 hung at `initialize`; 0.2.67/0.2.69/0.2.70 answered `initialize` but hung at
+the *next* request (`session/new`). 0.2.71 (and 0.2.72) answer `session/new` with stdin
+held open and pass the full live ACP gate (handshake, prompt round-trip, session restore,
+plan-mode, subagent). Last pre-fix working build was **0.2.60**. **Windows-only** — macOS
+ran the broken builds fine (see § macOS is not affected). As of **v1.4.18** the extension
+adopts **0.2.72 as the supported build** (`GROK_STDIO_DOWNGRADE_TARGET`): it pins the
+bounded broken range **0.2.61–0.2.70** up to 0.2.72 before spawning, re-enables Windows
+updates, and keeps the reactive net as a backstop for any *future* build above 0.2.72.
+Tracked in extension issue [#22](https://github.com/phuryn/grok-build-vscode/issues/22).
 
-> **0.2.69 (alpha) probe, 2026-06-27** — installed via the official updater on the alpha
-> channel and ran the session/new probe: `initialize` answered @1114ms, then `session/new`
-> never answered with stdin open; the queued notifications flushed only after stdin EOF and
-> the process exited — identical to 0.2.67. No fix on stable (0.2.67) or alpha (0.2.69).
+> **0.2.71 (alpha) probe, 2026-06-28** — the hourly fix-watch caught it. `session/new`
+> answered @1848ms with stdin **open** (notifications arrived *before* EOF), and
+> `npm run test:live` passed 5/6 (image-gen skipped — model declined). 0.2.69 and 0.2.70
+> (alpha) had both still hung at `session/new`; 0.2.71 is the first build above 0.2.60
+> that works.
 
 ## 0.2.67 does NOT fix it — the hang moved to `session/new` (2026-06-26)
 
@@ -134,24 +136,26 @@ Any persistent client hangs.
 
 ## Extension mitigation (shipped)
 
-The extension can't make grok read stdin, so it **pins Windows back to the last
-fully-working 0.2.60**: before spawning it reads `grok --version`, and if the build is
-**above 0.2.60** (`isStdioBrokenGrokVersion` is open-ended as of 1.4.17,
-[src/cli-locator.ts](../src/cli-locator.ts)) it runs `grok update --version 0.2.60`
-([src/sidebar.ts](../src/sidebar.ts) `maybePinBrokenCli`). `grokUpdatePolicy` blocks
-Windows updates onto unsupported builds (pinning to 0.2.60, never `latest`), and the
-reactive net (`shouldReactivelyDowngrade`) is the backstop for when the proactive pin
-couldn't run (version read failed, or the binary was locked so `grok update` couldn't
-rename it) — it recovers on an observed startup failure at **`initialize` *or*
-`session/new`**. When a build is genuinely fixed (re-verify with the **session/new**
-probe, not just `initialize`), bump `GROK_STDIO_DOWNGRADE_TARGET`; builds at/below it stop
-being flagged, which adopts the fix.
+As of **v1.4.18** the extension adopts **0.2.72 as the supported build** (the fix landed
+in 0.2.71, now on stable as 0.2.72) (`GROK_STDIO_DOWNGRADE_TARGET`): before spawning it
+reads `grok --version`, and if the build is in the bounded broken range **0.2.61–0.2.70**
+(`isStdioBrokenGrokVersion`, [src/cli-locator.ts](../src/cli-locator.ts)) it runs
+`grok update --version 0.2.72` ([src/sidebar.ts](../src/sidebar.ts) `maybePinBrokenCli`) —
+moving those builds *up* to the fix. Windows updates are **no longer paused**
+(`grokUpdatePolicy` allows normally), and the reactive net (`shouldReactivelyDowngrade`)
+is the backstop for a *future* build **above** 0.2.72 that's still broken, or for when the
+proactive pin couldn't run (version read failed, or the binary was locked) — it recovers
+on an observed startup failure at **`initialize` *or* `session/new`**. When a newer
+Windows-verified build ships (re-verify with the **session/new** probe, not just
+`initialize`), bump `GROK_STDIO_DOWNGRADE_TARGET` and widen the broken range to include the
+superseded builds.
 
-> **History:** v1.4.12 introduced the 0.2.60 pin with the range closed at 0.2.64;
-> v1.4.13 added the reactive net; v1.4.15 extended the range to 0.2.67 and broadened the
-> reactive trigger to `session/new` after confirming 0.2.67 only *moved* the bug; v1.4.17
-> made the proactive guard **open-ended** (any build above 0.2.60) after alpha 0.2.69 also
-> hung at `session/new` — chasing a bounded range per broken build wasn't worth it.
+> **History:** v1.4.12 introduced the 0.2.60 pin (range closed at 0.2.64); v1.4.13 added
+> the reactive net; v1.4.15 extended the range to 0.2.67 and broadened the reactive trigger
+> to `session/new` after 0.2.67 only *moved* the bug; v1.4.17 made the proactive guard
+> open-ended (any build above 0.2.60) after alpha 0.2.69/0.2.70 also hung; **v1.4.18 adopts
+> the fix** — bounded broken range 0.2.61–0.2.70, supported floor 0.2.72 (fix landed in
+> 0.2.71, promoted to stable as 0.2.72), Windows updates re-enabled.
 
 ---
 

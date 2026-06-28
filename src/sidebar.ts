@@ -899,15 +899,15 @@ See design doc for the full state machine diagram.`;
   }
 
   /**
-   * Pin the grok CLI back to the last working version when it's on a build with
-   * the Windows `agent stdio` regression (issue #22) — 0.2.61–0.2.64 hang the ACP
-   * `initialize` handshake forever (the agent doesn't read stdin until EOF, which
-   * never comes for a live client), so a session can't start at all. We detect the
-   * broken range from `grok --version` *before* spawning and run
-   * `grok update --version 0.2.60` to restore a working CLI. Runs at most once per
-   * activation; best-effort — a failed probe or downgrade is logged and we proceed
-   * (the user still gets the actionable start-failure error). Remove this once xAI
-   * ships a verified fix and `isStdioBrokenGrokVersion` stops matching it.
+   * Pin the grok CLI to the supported version when it's on a build with the Windows
+   * `agent stdio` regression (issue #22) — 0.2.61–0.2.70 hang at startup (the agent
+   * doesn't read stdin until EOF, which never comes for a live client), so a session
+   * can't start at all. We detect that bounded range from `grok --version` *before*
+   * spawning and run `grok update --version <supported>` to move onto the fixed build
+   * (0.2.72). Runs at most once per activation; best-effort — a failed probe or pin is
+   * logged and we proceed (the user still gets the actionable start-failure error).
+   * Once a newer Windows-verified build ships, bump `GROK_STDIO_DOWNGRADE_TARGET` and
+   * widen the broken range to include the now-superseded builds.
    */
   private async maybePinBrokenCli(cliPath: string): Promise<void> {
     if (this.brokenCliPinned) return;
@@ -926,11 +926,12 @@ See design doc for the full state machine diagram.`;
   }
 
   /**
-   * Run `grok update --version 0.2.60` and notify the user, returning true on
-   * success. Shared by the proactive pin (`maybePinBrokenCli`, before spawn) and
-   * the reactive recovery (after an observed init failure on a build the proactive
-   * range didn't know about). Best-effort: a failure is logged and returns false.
-   * Every downgrade — proactive or reactive — surfaces a one-time notification.
+   * Run `grok update --version <supported>` (0.2.72) and notify the user, returning
+   * true on success. Shared by the proactive pin (`maybePinBrokenCli`, before spawn —
+   * moves a 0.2.61–0.2.70 build *up* to 0.2.72) and the reactive recovery (after an
+   * observed startup failure on a future build *above* 0.2.72 — a downgrade).
+   * Best-effort: a failure is logged and returns false. Every pin surfaces a one-time
+   * notification.
    */
   private async downgradeBrokenCli(
     cliPath: string,
@@ -952,10 +953,10 @@ See design doc for the full state machine diagram.`;
       if (stderr?.trim()) this.output.appendLine(stderr.trim());
       void vscode.window.showInformationMessage(
         reason === "reactive"
-          ? `Grok CLI ${fromVersion} failed to start a session (issue #22). Downgraded to the ` +
-              `last working version ${GROK_STDIO_DOWNGRADE_TARGET} and retrying.`
-          : `Grok CLI ${fromVersion} has a bug that prevents the extension from starting a session ` +
-              `(issue #22). Pinned to the last working version ${GROK_STDIO_DOWNGRADE_TARGET} until xAI ships a fix.`,
+          ? `Grok CLI ${fromVersion} failed to start a session (issue #22). Switched to the ` +
+              `supported version ${GROK_STDIO_DOWNGRADE_TARGET} and retrying.`
+          : `Grok CLI ${fromVersion} has the issue #22 stdio bug that prevents the extension from ` +
+              `starting a session. Pinned to the supported version ${GROK_STDIO_DOWNGRADE_TARGET}.`,
       );
       return true;
     } catch (e) {
@@ -1197,9 +1198,9 @@ See design doc for the full state machine diagram.`;
     if (gen !== session.gen) return undefined;
 
     // If the (possibly just-updated) CLI is on a build with the Windows stdio
-    // regression (issue #22), pin it back to the last working version before we
-    // spawn — otherwise the ACP handshake hangs forever. Runs after the silent
-    // update so it corrects an upgrade that landed on a broken latest.
+    // regression (issue #22, builds 0.2.61–0.2.70), pin it to the supported version
+    // (0.2.72) before we spawn — otherwise the ACP handshake hangs forever. Runs after
+    // the silent update so it corrects an upgrade that landed on a still-broken build.
     await this.maybePinBrokenCli(cliPath);
     if (gen !== session.gen) return undefined;
 
@@ -1517,37 +1518,36 @@ See design doc for the full state machine diagram.`;
       if (/auth|unauthor|forbidden|401|403|api[_\s-]?key|credential|sign.?in/i.test(msg)) {
         this.emit(session, { type: "onboarding", state: "auth-required" });
       } else if (process.platform === "win32" && /timed out: (initialize|session\/(new|load))|exited \(code null\)/i.test(msg)) {
-        // The signature of the 0.2.61+ Windows stdio regression (issue #22): a
-        // startup request hangs because the agent won't read stdin until EOF. The
-        // hang moved across builds — `initialize` on 0.2.61–0.2.64, `session/new`
-        // on 0.2.67/0.2.69 — so we match either startup request, not just initialize.
-        // The proactive pin (maybePinBrokenCli) now pins any build above 0.2.60 before
-        // spawning; this reactive net is the backstop for when that pin couldn't run
+        // The signature of the Windows stdio regression (issue #22): a startup request
+        // hangs because the agent won't read stdin until EOF. It spanned 0.2.61–0.2.70
+        // (`initialize` on 0.2.61–0.2.64, `session/new` on 0.2.67/0.2.69/0.2.70) and was
+        // fixed in 0.2.71. The proactive pin (maybePinBrokenCli) covers that bounded
+        // range before spawning; this reactive net is the backstop for a *future*
+        // still-broken build above 0.2.72, or when the proactive pin couldn't run
         // (version read failed, or the binary was locked so `grok update` couldn't
-        // rename it). We downgrade on the observed failure and retry the spawn once.
-        // After the pin the version is 0.2.60, so shouldReactivelyDowngrade() can't
-        // loop; a later manual re-upgrade pushes it back above the target and re-arms
-        // the recovery.
+        // rename it). We switch to 0.2.72 on the observed failure and retry the spawn
+        // once. After the pin the version is 0.2.72, so shouldReactivelyDowngrade()
+        // can't loop; a later manual re-upgrade above 0.2.72 re-arms the recovery.
         const version = await this.readGrokVersion(cliPath);
         if (!this.reactiveDowngradeInFlight && shouldReactivelyDowngrade(version, process.platform)) {
           this.reactiveDowngradeInFlight = true;
           try {
             const detected = parseGrokVersion(version)?.join(".") ?? version;
             if (await this.downgradeBrokenCli(cliPath, detected, "reactive")) {
-              return await this.startSession(resumeId); // retry the spawn on 0.2.60
+              return await this.startSession(resumeId); // retry the spawn on the supported build
             }
           } finally {
             this.reactiveDowngradeInFlight = false;
           }
         }
-        // Downgrade unavailable, already attempted, or it didn't help — point the
-        // user at the manual workaround instead of a bare timeout.
+        // Pin unavailable, already attempted, or it didn't help — point the user at
+        // the manual workaround instead of a bare timeout.
         this.emit(session, {
           type: "error",
           text:
-            `Failed to start Grok: ${msg}. This is a known regression in Grok CLI 0.2.61+ ` +
-            `(issue #22). Workaround: run \`grok update --version ${GROK_STDIO_DOWNGRADE_TARGET}\` in a terminal, ` +
-            `then start a new session.`,
+            `Failed to start Grok: ${msg}. This matches the Grok CLI 0.2.61–0.2.70 stdio ` +
+            `regression (issue #22, fixed in ${GROK_STDIO_DOWNGRADE_TARGET}). Workaround: run ` +
+            `\`grok update --version ${GROK_STDIO_DOWNGRADE_TARGET}\` in a terminal, then start a new session.`,
         });
       } else {
         this.emit(session, { type: "error", text: `Failed to start Grok: ${msg}` });

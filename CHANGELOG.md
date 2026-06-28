@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.18 — 2026-06-28
+
+> Grok CLI fixed the #22 Windows session-start regression (0.2.71, now on stable as 0.2.72) — adopt it and re-enable updates.
+
+### Fixed
+
+- **Sessions start on the latest Grok CLI again, and Windows updates are no longer paused (#22).** xAI fixed the `agent stdio` regression that hung session start on Windows across 0.2.61–0.2.70 (initialize on 0.2.61–0.2.64, then `session/new` on 0.2.67–0.2.70). The fix landed in **0.2.71** and is now on the **stable** channel as **0.2.72**. Verified end-to-end on native Windows — the `session/new` stdin-open probe passes and the full live ACP gate is green (handshake, prompt round-trip, session restore, plan-mode, subagent). The extension now treats **0.2.72 as the supported build**: it pins the bounded broken range **0.2.61–0.2.70** up to 0.2.72 before starting, and the gear → **Update Grok Build CLI** action (and the silent on-upgrade update) work normally again on Windows. The reactive downgrade-on-failure remains a backstop for any *future* still-broken build above 0.2.72. ([src/cli-locator.ts](src/cli-locator.ts), [src/sidebar.ts](src/sidebar.ts))
+
 ## 1.4.17 — 2026-06-27
 
 > Pin Windows to the last working Grok CLI for *any* newer build — 0.2.61–0.2.69 all break session start (#22).

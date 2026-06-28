@@ -46,11 +46,14 @@ export function extensionWasUpgraded(lastSeen: string | undefined, current: stri
 }
 
 /**
- * Last grok CLI version known to work with the extension's `agent stdio` ACP
- * transport on Windows. We pin the CLI to this when it's on a broken build (see
- * `isStdioBrokenGrokVersion`).
+ * The supported grok CLI version the extension pins Windows to. The `agent stdio`
+ * #22 regression broke **0.2.61–0.2.70**; the fix landed in **0.2.71** and is now on
+ * the **stable** channel as **0.2.72** (the supported build here), verified end-to-end
+ * via the session/new probe + the live ACP gate. We pin a broken build to this. Bump
+ * it when a newer Windows-verified build ships — re-verify with the **session/new**
+ * probe, not just `initialize`.
  */
-export const GROK_STDIO_DOWNGRADE_TARGET = "0.2.60";
+export const GROK_STDIO_DOWNGRADE_TARGET = "0.2.72";
 
 /**
  * Parse a grok `--version` banner ("grok 0.2.64 (9a9ac25b10) [stable]") into a
@@ -63,29 +66,27 @@ export function parseGrokVersion(versionOutput: string): [number, number, number
 }
 
 /**
- * grok CLI 0.2.61+ ships a Windows-only `agent stdio` regression: the agent doesn't
- * read stdin lines until stdin hits EOF (which never comes for a live client), so an
- * ACP startup request times out and the process is torn down ("exited with code
- * null"). It *mutated* across builds — on **0.2.61–0.2.64** even `initialize` hangs;
- * on **0.2.67** (stable) and **0.2.69** (alpha) `initialize` is answered but the
- * *next* request (`session/new`) hangs — and it has **stayed broken on every build
- * above 0.2.60 tested, on both channels, with no fix**. Confirmed via controlled
- * spawns (closing stdin → the read unblocks; keeping it open as any real client must
- * → hang). See issue #22 and `research/stdio-eof-regression.md`.
+ * grok CLI **0.2.61–0.2.70** shipped a Windows-only `agent stdio` regression: the
+ * agent didn't read stdin lines until EOF (which never comes for a live client), so an
+ * ACP startup request timed out and the process was torn down ("exited with code
+ * null"). It mutated across builds — 0.2.61–0.2.64 hung at `initialize`;
+ * 0.2.67/0.2.69/0.2.70 answered `initialize` but hung at `session/new` — and was
+ * **fixed in 0.2.71**, now on stable as **0.2.72** (`GROK_STDIO_DOWNGRADE_TARGET`),
+ * verified via the session/new probe + the live ACP gate. See issue #22 and
+ * `research/stdio-eof-regression.md`.
  *
- * Because the breakage has been continuous (not a bounded range that's worth
- * chasing), this treats **any Windows build above `GROK_STDIO_DOWNGRADE_TARGET`
- * (0.2.60) as broken** and pins it back to 0.2.60 before spawning. That covers new
- * broken builds with no code change and avoids the ~120s reactive hang per build. When
- * xAI ships a build that passes the **session/new probe** (not just `initialize`),
- * raise `GROK_STDIO_DOWNGRADE_TARGET` to it — builds at/below the new supported version
- * stop being flagged, which adopts the fix. Pure.
+ * Detect the bounded broken range **0.2.61–0.2.70** (Windows only) so the host pins
+ * those builds to the supported 0.2.72 before spawning. The fix sits *above* the broken
+ * range, so this is a closed range — not an open-ended "anything newer" check: both
+ * 0.2.71+ and <=0.2.60 are fine. A *future* still-broken build above 0.2.72 is caught
+ * reactively (`shouldReactivelyDowngrade`). Pure.
  */
 export function isStdioBrokenGrokVersion(versionOutput: string, platform: NodeJS.Platform): boolean {
   if (platform !== "win32") return false;
   const v = parseGrokVersion(versionOutput);
   if (!v) return false;
-  return compareVersionTuple(v, parseGrokVersion(GROK_STDIO_DOWNGRADE_TARGET)!) > 0;
+  const [maj, min, pat] = v;
+  return maj === 0 && min === 2 && pat >= 61 && pat <= 70;
 }
 
 /** Compare two `[major, minor, patch]` tuples: <0, 0, or >0. Pure. */
@@ -97,14 +98,11 @@ export function compareVersionTuple(a: [number, number, number], b: [number, num
  * Decision for the "Update Grok Build CLI" action (manual menu *and* the silent
  * on-upgrade update), given the installed version + platform.
  *
- * The Windows `agent stdio` regression (see `isStdioBrokenGrokVersion`) makes any
- * build above `GROK_STDIO_DOWNGRADE_TARGET` (0.2.60) unusable by the extension, so
- * on Windows we must **never move the CLI onto an unsupported build**:
- *   - at/above the 0.2.60 ceiling → **block** the update (a note explains why);
- *   - below the ceiling → **allow**, but pin the update to 0.2.60, never `latest`.
- * Other platforms are unaffected (latest works) → always allow, no pin.
- * An unparseable version is treated as "allow, no pin" so we never wedge a user
- * who's on a build we can't reason about.
+ * The #22 Windows update pause is **lifted** now that 0.2.71 fixes the regression —
+ * updates proceed normally on every platform (to `latest`). The #22 safety net still
+ * stands behind this: the proactive pin (`isStdioBrokenGrokVersion` → 0.2.61–0.2.70)
+ * and the reactive downgrade (`shouldReactivelyDowngrade` → builds above 0.2.72)
+ * recover a session if an update ever lands on a still-broken build.
  */
 export interface GrokUpdatePolicy {
   /** May the update run at all? */
@@ -115,36 +113,23 @@ export interface GrokUpdatePolicy {
   note?: string;
 }
 
-export function grokUpdatePolicy(versionOutput: string, platform: NodeJS.Platform): GrokUpdatePolicy {
-  if (platform !== "win32") return { allow: true };
-  const v = parseGrokVersion(versionOutput);
-  if (!v) return { allow: true };
-  const ceiling = parseGrokVersion(GROK_STDIO_DOWNGRADE_TARGET)!;
-  if (compareVersionTuple(v, ceiling) < 0) {
-    // Behind the supported ceiling — updating helps, but only as far as 0.2.60.
-    return { allow: true, target: GROK_STDIO_DOWNGRADE_TARGET };
-  }
-  // At/above the ceiling: any update would land on (or stay on) a broken build.
-  return {
-    allow: false,
-    note:
-      `Grok CLI updates are paused — 0.2.61+ has a bug that breaks the extension (#22). ` +
-      `Supported version: ${GROK_STDIO_DOWNGRADE_TARGET}.`,
-  };
+export function grokUpdatePolicy(_versionOutput: string, _platform: NodeJS.Platform): GrokUpdatePolicy {
+  // Updates are no longer gated for #22 (fixed in 0.2.71). Always allow, to latest.
+  return { allow: true };
 }
 
 /**
  * Should the host REACTIVELY downgrade the CLI after an *observed* `agent stdio`
  * init failure (handshake timeout / "exited code null")?
  *
- * The proactive `isStdioBrokenGrokVersion` now pins any build above the supported
- * target before spawning, so in normal operation this rarely fires. It's the
- * evidence-driven backstop for the cases the proactive pin can't cover — the version
- * read failed, or the pin (`grok update`) couldn't run (e.g. a locked binary) — so a
- * session that still spawns on a broken build and hangs gets recovered. It fires on
- * the real failure (`initialize` *or* `session/new`), not a version guess.
+ * The proactive `isStdioBrokenGrokVersion` covers the known broken range
+ * (0.2.61–0.2.70) before spawning. This is the evidence-driven backstop for a *future*
+ * still-broken build **above** the supported 0.2.72 (no static range can predict it),
+ * or for cases the proactive pin couldn't run (version read failed, or the binary was
+ * locked so `grok update` couldn't rename it). It fires on the real failure
+ * (`initialize` *or* `session/new`), not a version guess, and pins back to 0.2.72.
  *
- * Windows-only (the regression is). A build at/below 0.2.60 is never downgraded —
+ * Windows-only (the regression is). A build at/below 0.2.72 is never downgraded —
  * that's the loop guard: once the pin lands the version is exactly the target, so a
  * subsequent failure (some other cause) can't trigger another downgrade. A later
  * *manual* re-upgrade pushes the version back above the target, so a fresh failure
