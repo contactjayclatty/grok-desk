@@ -250,6 +250,7 @@ Or edit the config via gear → *Open global / project config*, then click **+**
 | `grok.includeActiveFileByDefault` | `true` | Auto-add the active editor as a context chip. |
 | `grok.useCtrlEnterToSend` | `false` | When true, Enter inserts a newline and Ctrl/Cmd+Enter sends. |
 | `grok.showThinking` | `false` | Show Grok's reasoning (thinking) traces in chat. Off shows a *Thinking…* stand-in. Also toggleable live from gear → Config & debug. |
+| `grok.telemetry.enabled` | `true` | Send anonymous, privacy-first usage telemetry (see [Privacy](#privacy)). Also honors VS Code's global `telemetry.telemetryLevel`. |
 | `grok.chatFontScale` | `100` | Zoom for the chat panel only, as a percent (`150`, `200`, …). Scales the whole chat UI without rescaling the rest of VS Code (unlike `Ctrl/Cmd+Shift+=`). Applies live; supports User (global) and Workspace (local) scope. |
 | `grok.voiceApiKey` | `""` | xAI API key for voice Speech-to-Text — a separate [console.x.ai](https://console.x.ai) developer key, not the CLI login. Empty = fall back to `GROK_VOICE_API_KEY` / `XAI_API_KEY` in the workspace `.env`. |
 | `grok.ffmpegPath` | `""` | Path to `ffmpeg` for microphone recording. Empty = use `ffmpeg` from `PATH`. |
@@ -325,6 +326,17 @@ npm run package  # → grok-vscode-phuryn-<version>.vsix
 - **Diff preview semantics.** The diff editor compares the proposed old vs. new text against each other, not against the file on disk at preview time. The write happens via `fs/write_text_file` after approval. This is an ACP constraint — `tool_call_update` carries the diff before the file is touched.
 - **No worktree UI.** `Grok: New Worktree Session` is planned but not yet implemented.
 - **View placement.** The view defaults to the left activity bar; drag it to the secondary side bar manually if you want it on the right.
+
+---
+
+## Privacy
+
+The extension sends **anonymous, privacy-first usage telemetry** ([Aptabase](https://aptabase.com)) so we can gauge how many people use it and which models/modes are popular. It is deliberately minimal:
+
+- **One event** — `session_start`, fired on the **first real message** of a session (never the hidden primer, never empty/abandoned sessions).
+- **What it contains:** an anonymous **install id** (a random GUID generated once on your machine — not your account, email, or grok login), the **mode / model / effort** you used, your **OS** and the extension **version**. Country is inferred by Aptabase from your IP, which is then **discarded** — the IP is never stored.
+- **What it never contains:** any message content, code, file names/paths, or personal information.
+- **Opt out** anytime: set `grok.telemetry.enabled` to `false`, or disable VS Code's global telemetry (`telemetry.telemetryLevel`) — either one stops all sending.
 
 ---
 

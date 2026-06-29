@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.24 — 2026-06-29
+
+> Privacy-first, opt-out anonymous usage telemetry.
+
+### Added
+
+- **Anonymous usage telemetry (Aptabase).** One `session_start` event per session — fired on the **first real user message** (never the primer or empty/abandoned sessions) — carrying only an anonymous install id (a random GUID, no account or grok-login identity) plus the chosen **mode / model / effort**. **No message content, code, or file paths are ever sent;** country is derived by Aptabase from the request IP and the IP is then discarded. **On by default but fully gated** — it sends only when VS Code's global `telemetry.telemetryLevel` is enabled *and* the new `grok.telemetry.enabled` setting is on; either off stops everything. The event is built synchronously (capturing the right session's mode/model/effort) but **fired asynchronously off the send path** and any error is **swallowed silently**, so telemetry can never slow, surface to, or break a turn — a failure (offline, a wrong/typo'd key → a harmless 404, a malformed event) just means nothing lands. Thin, dependency-free client (no SDK). ([src/telemetry.ts](src/telemetry.ts), [src/sidebar.ts](src/sidebar.ts), [package.json](package.json))
+
+### Tests — 609
+
+- New: the telemetry helpers — `aptabaseHost` (region from app key), `osNameFromPlatform`, the `shouldSendTelemetry` two-gate check, distinct prod/dev keys, `buildSessionStartEvent` (install id + mode/model/effort as props, no content), and that `postEvent` **never throws** (a circular/malformed event or a no-region key is a silent no-op) ([test/telemetry.test.ts](test/telemetry.test.ts)). The unit suite stays network-free; a separate `npm run telemetry:probe` ([scripts/telemetry-probe.cjs](scripts/telemetry-probe.cjs), with an `APTABASE_KEY` override to fire a wrong key) sends real events to a **dev** Aptabase project (the published extension always reports to prod).
+
 ## 1.4.23 — 2026-06-29
 
 > Hidden-by-default thinking traces with an always-on progress indicator, a scroll-to-bottom button, a remembered mode preference, and the YOLO → Auto accept rename.

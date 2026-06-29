@@ -13,6 +13,14 @@ import { VoiceStreamer } from "./voice-streamer";
 import { MediaRef, isIncompatibleAgentError, permissionOutcomeFor, summarizeBackgroundCommand } from "./acp-dispatch";
 import { modeToRemember, startsInYolo } from "./mode-prefs";
 import {
+  APTABASE_APP_KEY_PROD,
+  buildSessionStartEvent,
+  osNameFromPlatform,
+  postEvent,
+  shouldSendTelemetry,
+} from "./telemetry";
+import { randomUUID } from "node:crypto";
+import {
   locateGrokCli,
   extensionWasUpgraded,
   isStdioBrokenGrokVersion,
@@ -93,6 +101,8 @@ type WebviewMsg =
   | { type: "voiceStop" };
 
 const SESSION_META_KEY = "grok.sessionMeta";
+/** globalState key for the anonymous per-install telemetry GUID (survives updates). */
+const INSTALL_ID_KEY = "grok.installId";
 
 // History pagination: rows fetched per "page" (initial open + each load-more / search page).
 const SESSION_PAGE_SIZE = 100;
@@ -2189,6 +2199,61 @@ See design doc for the full state machine diagram.`;
     this.post({ type: "showThinking", value: this.showThinking() });
   }
 
+  /** Anonymous, per-install GUID — generated once and kept in globalState (so it
+   *  survives extension updates). It's an opaque random id, not tied to any
+   *  account or the grok login; it's sent only as an event property so distinct
+   *  installs can be counted without identifying anyone. */
+  private installId(): string {
+    let id = this.context.globalState.get<string>(INSTALL_ID_KEY);
+    if (!id) {
+      id = randomUUID();
+      void this.context.globalState.update(INSTALL_ID_KEY, id);
+    }
+    return id;
+  }
+
+  /** Fire the single `session_start` telemetry event for the first real user
+   *  message of `session` (callers gate on isFirstSend, so primers/empty sessions
+   *  never reach here). Respects VS Code's global telemetry setting + our own
+   *  `grok.telemetry.enabled`; fully fire-and-forget. */
+  private reportSessionStart(session: Session): void {
+    // Telemetry must NEVER affect the user's turn. Build the event synchronously
+    // (so it captures THIS session's mode/model/effort — focus could move during
+    // the turn's awaits), then fire it asynchronously off the send path and
+    // swallow any error silently. The PROD project always (dev host / local
+    // installs included — only the probe script uses DEV).
+    try {
+      const enabled = shouldSendTelemetry(
+        vscode.env.isTelemetryEnabled,
+        vscode.workspace.getConfiguration("grok").get<boolean>("telemetry.enabled", true),
+      );
+      if (!enabled) return;
+      const cfg = vscode.workspace.getConfiguration("grok");
+      const appVersion = (this.context.extension.packageJSON as { version?: string })?.version ?? "";
+      const event = buildSessionStartEvent(
+        {
+          installId: this.installId(),
+          mode: this.displayMode(),
+          model: session.client?.currentModelId || cfg.get<string>("defaultModel", "") || "",
+          effort: cfg.get<string>("defaultEffort", ""),
+        },
+        {
+          appVersion,
+          osName: osNameFromPlatform(process.platform),
+          osVersion: os.release(),
+          locale: vscode.env.language || "",
+          isDebug: this.context.extensionMode !== vscode.ExtensionMode.Production,
+        },
+        randomUUID(),
+        new Date().toISOString(),
+      );
+      // Off the send path entirely; postEvent is itself non-blocking + self-guarding.
+      setImmediate(() => postEvent(APTABASE_APP_KEY_PROD, event));
+    } catch {
+      // Silent — a telemetry failure must never surface to or affect the user.
+    }
+  }
+
   private postVoiceConfigured(): void {
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const cfg = vscode.workspace.getConfiguration("grok");
@@ -2592,7 +2657,12 @@ See design doc for the full state machine diagram.`;
 
     const isFirstSend = !session.hasHistory;
     session.hasHistory = true;
-    if (isFirstSend) session.firstUserMessageForTitle = text;
+    if (isFirstSend) {
+      session.firstUserMessageForTitle = text;
+      // One `session_start` per session, on the first real user message — never
+      // the primer (that takes a separate prompt path that doesn't set hasHistory).
+      this.reportSessionStart(session);
+    }
     const sentChips = chips.filter((c) => !c.hidden);
     session.userMessageCount += 1;
     session.inUserMessage = false; // live send isn't part of the streamed-chunk count path
