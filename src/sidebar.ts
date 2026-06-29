@@ -11,6 +11,7 @@ import { resolveVoiceKey, parseVoiceCommand, DEFAULT_SEND_PHRASE } from "./voice
 import { VoiceRecorder, transcribeAudio, resolveWindowsAudioDevice } from "./voice-recorder";
 import { VoiceStreamer } from "./voice-streamer";
 import { MediaRef, isIncompatibleAgentError, permissionOutcomeFor, summarizeBackgroundCommand } from "./acp-dispatch";
+import { modeToRemember, startsInYolo } from "./mode-prefs";
 import {
   locateGrokCli,
   extensionWasUpgraded,
@@ -69,6 +70,7 @@ type WebviewMsg =
   | { type: "openProjectConfig" }
   | { type: "runMcpList" }
   | { type: "showLogs" }
+  | { type: "setShowThinking"; value: boolean }
   | { type: "dropFile"; path: string; shift: boolean }
   | { type: "permissionAnswer"; requestId: number | string; optionId: string }
   | { type: "exitPlanAnswer"; requestId: number | string; verdict: "approved" | "abandoned" | "rejected"; comment?: string }
@@ -269,6 +271,9 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
       if (e.affectsConfiguration("grok.chatFontScale")) {
         this.postFontScale();
       }
+      if (e.affectsConfiguration("grok.showThinking")) {
+        this.postShowThinking();
+      }
     });
   }
 
@@ -433,6 +438,16 @@ See design doc for the full state machine diagram.`;
     // Plan which also tells the CLI to plan instead of act. The mode button only
     // ever drives the focused session.
     const session = this.focused;
+    // Remember the user's last non-plan mode so new sessions start in it (#25).
+    // setMode is only ever called from the webview (user action), so this
+    // captures intent, not restore/replay bookkeeping (those use client.setMode
+    // directly). `modeToRemember` drops Plan (a transient per-task choice).
+    const remember = modeToRemember(modeId);
+    if (remember) {
+      void vscode.workspace
+        .getConfiguration("grok")
+        .update("defaultMode", remember, vscode.ConfigurationTarget.Global);
+    }
     if (modeId === "yolo") {
       session.autoApprove = true;
       this.setPlanActive(session, false); // posts displayMode → "yolo"
@@ -1184,7 +1199,15 @@ See design doc for the full state machine diagram.`;
     this.stopVoiceInput();
     session.client?.dispose();
     session.client = undefined;
-    session.autoApprove = false;
+    // A brand-new session starts in the remembered mode (#25) immediately, so the
+    // toolbar shows the right one from the first paint — no Agent → Auto accept
+    // flash while the session spins up and primes. Resumed sessions stay
+    // verdict-driven (plan-restore decides), so they don't pre-apply it.
+    const rememberedYolo = startsInYolo(
+      vscode.workspace.getConfiguration("grok").get<string>("defaultMode", ""),
+      !!resumeId,
+    );
+    session.autoApprove = rememberedYolo;
     session.planActive = false;
     session.afterTurn = undefined;
     session.hasHistory = false;
@@ -1200,7 +1223,7 @@ See design doc for the full state machine diagram.`;
     session.titleGenerated = false;
     session.firstUserMessageForTitle = undefined;
     session.priming = true;
-    this.emit(session, { type: "modeChanged", modeId: "agent" });
+    this.emit(session, { type: "modeChanged", modeId: rememberedYolo ? "yolo" : "agent" });
     if (resumeId) this.emit(session, { type: "clearMessages" });
 
     // Lock the composer (spinner, disabled) for the session-start window —
@@ -1776,6 +1799,13 @@ See design doc for the full state machine diagram.`;
       case "showLogs":
         this.output.show();
         break;
+      case "setShowThinking":
+        // Persist globally (like the other display prefs); the config watcher
+        // re-posts the value, keeping every open webview in sync.
+        await vscode.workspace
+          .getConfiguration("grok")
+          .update("showThinking", !!msg.value, vscode.ConfigurationTarget.Global);
+        break;
       case "runInstallCmd": {
         const term = vscode.window.createTerminal("Install Grok");
         term.show();
@@ -2147,6 +2177,16 @@ See design doc for the full state machine diagram.`;
 
   private postFontScale(): void {
     this.post({ type: "fontScale", value: this.chatFontScale() });
+  }
+
+  /** grok.showThinking (#26) — whether grok's reasoning traces are shown. Off by
+   *  default; hidden traces are replaced by a lightweight "Thinking…" indicator. */
+  private showThinking(): boolean {
+    return vscode.workspace.getConfiguration("grok").get<boolean>("showThinking", false);
+  }
+
+  private postShowThinking(): void {
+    this.post({ type: "showThinking", value: this.showThinking() });
   }
 
   private postVoiceConfigured(): void {
@@ -2620,6 +2660,7 @@ See design doc for the full state machine diagram.`;
       cwd,
       useCtrlEnter: cfg.get("useCtrlEnterToSend", false),
       extVersion: (this.context.extension.packageJSON as { version?: string })?.version ?? "",
+      showThinking: cfg.get("showThinking", false),
     });
     if (cfg.get<boolean>("includeActiveFileByDefault", true)) {
       this.addActiveEditorChip();
@@ -3014,7 +3055,7 @@ See design doc for the full state machine diagram.`;
       content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; media-src ${webview.cspSource} data:; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
 <link rel="stylesheet" href="${mediaUri("chat.css")}" />
 </head>
-<body style="--chat-zoom: ${this.chatFontScale()}">
+<body class="${this.showThinking() ? "" : "thinking-hidden"}" style="--chat-zoom: ${this.chatFontScale()}">
 
   <header class="top-bar">
     <button id="history-btn" class="toolbar-btn" title="Session history"></button>
@@ -3033,6 +3074,7 @@ See design doc for the full state machine diagram.`;
   </main>
 
   <footer class="composer">
+    <button id="scroll-bottom-btn" class="scroll-bottom-btn" type="button" title="Scroll to bottom"></button>
     <div class="composer-input-wrap">
       <div id="input-highlight" class="input-highlight" aria-hidden="true"></div>
       <textarea id="input" placeholder="Ask Grok..." rows="3"></textarea>

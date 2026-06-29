@@ -108,6 +108,33 @@ code {
 .popover-check { color: var(--vscode-button-background); flex-shrink: 0; }
 .mode-popover-item { white-space: normal; align-items: flex-start; }
 
+/* On/off switcher used by toggle items in the gear popover (e.g. Show thinking
+   traces). White knob reads on both the muted-off and accent-on tracks across
+   light and dark themes. */
+.popover-switch {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 13px;
+  border-radius: 7px;
+  background: var(--vscode-input-border, #6e6e6e);
+  flex-shrink: 0;
+  transition: background 0.14s;
+}
+.popover-switch.on { background: var(--vscode-charts-blue, #3794ff); }
+.popover-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.14s;
+}
+.popover-switch.on .popover-switch-knob { transform: translateX(11px); }
+
 /* ---- messages ---- */
 
 .messages {
@@ -298,9 +325,9 @@ code {
 }
 .msg.user .msg-actions {
   justify-content: flex-end;
-  opacity: 1;
   padding: 0 10px;
 }
+.msg.user:hover .msg-actions,
 .msg.agent:hover .msg-actions,
 .msg-actions:focus-within { opacity: 1; }
 .msg-action-btn {
@@ -329,14 +356,20 @@ code {
 .thinking-header {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
   cursor: pointer;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: var(--vscode-font-size);
+  font-family: var(--vscode-font-family);
   padding: 3px 0;
   user-select: none;
 }
 .thinking-header:hover { color: var(--vscode-foreground); }
+/* Leading brain icon — mirrors the tool rows' .tool-icon so a thinking row reads
+   as a sibling of the tool rows (and matches the "Thinking…" stand-in). */
+.thinking-icon { width: 15px; height: 15px; flex: 0 0 auto; opacity: 0.85; }
+.thinking-icon svg { display: block; width: 100%; height: 100%; }
+.thinking-header:hover .thinking-icon { opacity: 1; }
 /* Chevron on the right (after the label), same glyph + rotate-on-expand as tool groups. */
 .thinking-chevron {
   margin-left: 4px;
@@ -354,23 +387,58 @@ code {
   margin-left: 7px;
   color: var(--vscode-descriptionForeground);
   font-style: italic;
-  font-size: 11px;
+  font-size: var(--vscode-font-size);
   white-space: pre-wrap;
   word-wrap: break-word;
 }
 
-/* "Grokking…" — the generic waiting placeholder. Matches the Thinking header's
-   muted font + animated loading-dots, but without the expand chevron (it carries
-   no body) and is not interactive. Replaced in place by real content. */
+/* Hide thinking traces by default (#26). A single body class hides every
+   reasoning block at once — live and replayed/old sessions alike — so the
+   gear → Config & debug toggle is an instant, reload-free flip. */
+body.thinking-hidden .msg.thinking { display: none; }
+
+/* Progress indicators (Grokking / "Thinking…" stand-in) share the tool rows'
+   metrics — editor font size, 15px leading icon @0.85, gap 7px, flush-left —
+   so they read as siblings of the tool rows, and all animate with the same
+   three blinking dots (.blink-dots) as a running tool. */
+.thinking-indicator,
 .grokking {
   display: inline-flex;
   align-items: center;
+  gap: 7px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  padding: 3px 10px;
-  margin: 2px 0;
+  font-size: var(--vscode-font-size);
+  padding: 3px 0;
   user-select: none;
 }
+.thinking-indicator-icon,
+.grokking-icon { width: 15px; height: 15px; flex: 0 0 auto; opacity: 0.85; }
+.thinking-indicator-icon svg,
+.grokking-icon svg { display: block; width: 100%; height: 100%; }
+/* The orbit icon slowly spins to reinforce "working". */
+.grokking-icon svg {
+  transform-origin: center;
+  animation: grokking-orbit 3.5s linear infinite;
+}
+@keyframes grokking-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .grokking-icon svg { animation: none; }
+}
+
+/* Three blinking dots — the tool rows' in-progress animation, reused by every
+   progress indicator so they all pulse identically (replacing the morphing "…"
+   ellipsis). Same `tool-dot-blink` keyframes the tool group uses. */
+.blink-dots {
+  display: inline-flex;
+  gap: 1px;
+  margin-left: 1px;
+}
+.blink-dots span {
+  opacity: 0.2;
+  animation: tool-dot-blink 1.4s infinite;
+}
+.blink-dots span:nth-child(2) { animation-delay: 0.2s; }
+.blink-dots span:nth-child(3) { animation-delay: 0.4s; }
 
 /* ---- file chips in user message history ---- */
 
@@ -503,9 +571,8 @@ code {
   transform: rotate(90deg);
 }
 .tool-group.in-progress .tool-chevron { display: none; } /* can't expand while running */
-/* Live (running) group stays active; it recedes to muted once it completes. */
-.tool-group.in-progress .tool-group-header { color: var(--vscode-foreground); }
-.tool-group.in-progress .tool-icon { opacity: 1; }
+/* A running group stays muted like the Grokking / Thinking indicators — the
+   blinking dots convey activity, not a brighter text color. */
 .tool-group-label { color: inherit; }
 .tool-dots { display: none; }
 .tool-group.in-progress .tool-dots {
@@ -718,6 +785,42 @@ code {
   gap: 6px;
   position: relative;
 }
+
+/* Floating "Scroll to bottom" (#28). Anchored to the composer (the chat input
+   area), so it sits inside the `--chat-zoom` scaled coordinate space and stays
+   correctly placed above the input at any font scale. Hidden (opacity + no
+   pointer events) until the user scrolls away from the bottom. */
+.scroll-bottom-btn {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translate(-50%, 4px);
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px 4px 9px;
+  border-radius: 13px;
+  border: 1px solid var(--vscode-editorWidget-border);
+  background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  color: var(--vscode-foreground);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease, background 0.12s ease;
+}
+.scroll-bottom-btn.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.scroll-bottom-btn:hover { background: var(--vscode-toolbar-hoverBackground); }
+.scroll-bottom-btn svg { display: block; }
+.scroll-bottom-label { white-space: nowrap; }
 
 /* The input is a textarea layered over a "backdrop" that highlights recognized
    voice commands (e.g. "grok send"). Textareas can't style their own text, so

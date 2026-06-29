@@ -83,9 +83,9 @@ Reload VS Code (**Ctrl+Shift+P → Developer: Reload Window**) and click the Gro
 ## Quick start
 
 1. **Open** the Grok sidebar (activity bar icon, or `Ctrl/Cmd+;`).
-2. **Type a prompt** and press **Enter**. Grok streams its answer; a *Thinking…* line resolves to *Thought for Ns* — click it to expand the reasoning.
+2. **Type a prompt** and press **Enter**. Grok streams its answer, showing a *Thinking…* line while it reasons. Want the full reasoning inline? Turn on **Show thinking traces** in the gear menu → *Config & debug*.
 3. **Approve actions.** When Grok wants to write a file or run a command it may raise a permission card — preview an edit in the native **diff editor**, then *Allow once / always / Reject*.
-4. **Pick your mode** (Agent / Plan / YOLO), **model**, and **reasoning effort** from the bottom toolbar and gear menu.
+4. **Pick your mode** (Agent / Plan / Auto accept), **model**, and **reasoning effort** from the bottom toolbar and gear menu.
 5. **Resume anytime** — the clock icon lists past sessions for this project.
 
 ---
@@ -97,20 +97,20 @@ _Click any feature to expand._
 <details>
 <summary><strong>Permission cards with diff preview</strong> — see every edit in VS Code's native diff before you approve</summary>
 
-When Grok proposes an edit, the card shows a `path — N → M lines` summary and an **open diff →** button that opens VS Code's native diff editor against the proposed content. Approve with *Allow once / always*, or *Reject*. The file is written only **after** you approve — no surprise changes to your files.
+When Grok proposes an edit, hit **open diff →** to review it in VS Code's native diff editor, then *Allow once / always* or *Reject*. The file is written only **after** you approve — no surprise changes to your files.
 
 ![Permission card with a native VS Code diff preview before approval](docs/screenshots/permission_diff.png)
 
 </details>
 
 <details>
-<summary><strong>Modes — Agent, Plan & YOLO</strong></summary>
+<summary><strong>Modes — Agent, Plan & Auto accept</strong></summary>
 
 | Mode | Behaviour |
 |---|---|
 | **Agent** (default) | Grok acts directly and **may** ask permission for a write or shell action it judges sensitive — a card appears in chat. |
 | **Plan** | Grok drafts a plan first and **cannot** write to the workspace or run anything outside a read-only allowlist until you approve. Approve / Reject / Cancel from the card, each with an optional comment. Plan Mode is enforced by the extension — see [How it works](#how-it-works). |
-| **YOLO** | The extension auto-approves every permission request. The CLI session is untouched — no restart, just a flag flip. |
+| **Auto accept** (YOLO) | The extension auto-approves every permission request. The CLI session is untouched — no restart, just a flag flip. |
 
 </details>
 
@@ -167,7 +167,7 @@ To keep a pile of background sessions from each pinning a live process, a sessio
 <details>
 <summary><strong>Session history</strong> — resume, rename, delete, or clear past sessions</summary>
 
-The clock icon lists the sessions the CLI saved for this project, most recent first. Click a row to resume — Grok replays the conversation, with inline images, plans, and reasoning intact. Hover to rename (pencil) or delete (trash); names default to the first message. The list loads the **most recent 100** and pulls in older ones as you **scroll**, and the **search box** filters by name across your whole history — so it stays fast even with thousands of sessions. **Clear all history** at the bottom of the dropdown removes every session for this project in one step (after a confirm), keeping the one you're currently in. Renames are stored by the extension and never touch Grok's own files.
+The clock icon lists this project's sessions, newest first. Click a row to resume — Grok replays the conversation, with inline images, plans, and reasoning intact — or hover to rename or delete it. The list loads the **most recent 100** and pulls in older ones as you **scroll**; the **search box** filters by name across your whole history, so it stays fast even with thousands of sessions. **Clear all history** (bottom of the dropdown) removes every session for this project except the current one, after a confirm. Renames are stored by the extension and never touch Grok's own files.
 
 ![Session history dropdown — resume, rename, delete, search, or clear past sessions](docs/screenshots/session_history.png)
 
@@ -176,7 +176,7 @@ The clock icon lists the sessions the CLI saved for this project, most recent fi
 <details>
 <summary><strong>Tool calls</strong> — every read, edit & command, inline</summary>
 
-Every action Grok takes appears in chat, each row led by a **category icon** — a single line ("Read sidebar.ts", "Edit package.json", "Run npm test"), or a batch summarized by what it actually did ("Explored 5 items", "Edited 2 files", "Ran 3 commands") that expands to the full list on click. Rows stay muted until you hover, and a tool that **fails** turns red with the reason inline.
+Every action Grok takes appears in chat as a **category-iconed** row — a single line, or a batch summarized by what it did ("Explored 5 items", "Edited 2 files") that expands to the full list on click. A tool that **fails** turns red with the reason inline.
 
 ![Tool calls grouped and summarized by category, with icons](docs/screenshots/tool_calls.png)
 
@@ -185,7 +185,7 @@ Every action Grok takes appears in chat, each row led by a **category icon** —
 <details>
 <summary><strong>Math &amp; LaTeX rendering</strong> — equations render as math, not raw TeX</summary>
 
-When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and environments like `\begin{pmatrix}` matrices, `cases`, integrals, sums, and Greek — the chat renders it as real typeset math via [MathJax](https://www.mathjax.org), bundled into the extension so it works **offline with no network**. Inline math sits on the text baseline in your editor's text color; display equations get their own centered block with horizontal scroll so a wide matrix doesn't overflow the narrow sidebar. A malformed expression shows a small inline error instead of blanking the message. **Hover a display equation** for actions: copy its LaTeX source, or export it as a PNG (your theme's background) or a transparent SVG tuned for a light or dark background. Bare `$…$` is intentionally **not** a delimiter — it would mangle prose like "it costs $5 and then $10".
+When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and environments like matrices, `cases`, integrals, sums, and Greek — the chat renders it as real typeset math via [MathJax](https://www.mathjax.org), bundled so it works **offline**. **Hover a display equation** to copy its LaTeX source or export it as a PNG or transparent SVG. Bare `$…$` is intentionally **not** a delimiter — it would mangle prose like "it costs $5 and then $10".
 
 ![LaTeX expressions rendered as typeset math](docs/screenshots/v1.4.5%20LaTeX%20expressions.png)
 
@@ -194,7 +194,7 @@ When Grok answers with LaTeX — inline `\(…\)`, display `\[…\]`, and enviro
 <details>
 <summary><strong>Mermaid diagrams</strong> — flowcharts and sequence diagrams render as diagrams</summary>
 
-When Grok answers with a ` ```mermaid ` block — flowcharts, sequence and state diagrams, git graphs, class and ER diagrams, and more — the chat renders it as a real diagram via [Mermaid](https://mermaid.js.org), bundled into the extension so it works **offline with no network**. Diagrams are themed to match your VS Code light/dark mode and scroll horizontally so a wide flowchart doesn't overflow the narrow sidebar. **Hover a diagram** to copy its source, or export it as a PNG (your theme's background) or a transparent SVG re-themed for a light or dark background. If a diagram is still streaming or turns out to be malformed, the readable diagram source is shown instead — you never lose the content.
+When Grok answers with a ` ```mermaid ` block — flowcharts, sequence and state diagrams, git graphs, class and ER diagrams — the chat renders it as a real diagram via [Mermaid](https://mermaid.js.org), bundled so it works **offline**, themed to your light/dark mode. **Hover a diagram** to copy its source or export it as a PNG or transparent SVG. While it's still streaming or if it's malformed, the readable source is shown instead — you never lose the content.
 
 ![Mermaid diagram rendered inline in the chat](docs/screenshots/v1.4.6%20Mermaid%20diagrams.png)
 
@@ -246,8 +246,10 @@ Or edit the config via gear → *Open global / project config*, then click **+**
 | `grok.cliPath` | `""` | Path to the `grok` binary. Empty = auto-discover (`~/.grok/bin/grok` → PATH). |
 | `grok.defaultModel` | `""` | Model ID for new sessions. Empty = CLI default. |
 | `grok.defaultEffort` | `""` | Reasoning effort forwarded as `--reasoning-effort` (`none` / `minimal` / `low` / `medium` / `high` / `xhigh`). Empty = CLI default. Changing it restarts the session. |
+| `grok.defaultMode` | `""` | Mode for new sessions, remembered automatically from your last Agent / Auto accept switch (Plan is never remembered). Empty = Agent. |
 | `grok.includeActiveFileByDefault` | `true` | Auto-add the active editor as a context chip. |
 | `grok.useCtrlEnterToSend` | `false` | When true, Enter inserts a newline and Ctrl/Cmd+Enter sends. |
+| `grok.showThinking` | `false` | Show Grok's reasoning (thinking) traces in chat. Off shows a *Thinking…* stand-in. Also toggleable live from gear → Config & debug. |
 | `grok.chatFontScale` | `100` | Zoom for the chat panel only, as a percent (`150`, `200`, …). Scales the whole chat UI without rescaling the rest of VS Code (unlike `Ctrl/Cmd+Shift+=`). Applies live; supports User (global) and Workspace (local) scope. |
 | `grok.voiceApiKey` | `""` | xAI API key for voice Speech-to-Text — a separate [console.x.ai](https://console.x.ai) developer key, not the CLI login. Empty = fall back to `GROK_VOICE_API_KEY` / `XAI_API_KEY` in the workspace `.env`. |
 | `grok.ffmpegPath` | `""` | Path to `ffmpeg` for microphone recording. Empty = use `ffmpeg` from `PATH`. |
@@ -271,7 +273,7 @@ VS Code commands (not Grok slash commands):
 | `Grok: Open` | Open the Grok sidebar |
 | `Grok: New Session` | Start a fresh session |
 | `Grok: Pick Model` | Open the model picker |
-| `Grok: Toggle Plan / Agent Mode` | Open the mode picker (Agent / Plan / YOLO) |
+| `Grok: Toggle Plan / Agent Mode` | Open the mode picker (Agent / Plan / Auto accept) |
 | `Grok: Send File` | Add the selected file to context |
 | `Grok: Send Selection` | Send the current text selection to Grok |
 | `Grok: Insert @-Mention` | Insert an `@`-mention for the active file into the composer |

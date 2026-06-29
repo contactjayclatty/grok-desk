@@ -348,14 +348,14 @@ describe("session status dots (Agent Dashboard)", () => {
 });
 
 describe("mode picker (the plan-gate entry path)", () => {
-  it("offers Agent / Plan / YOLO and posts setMode with the chosen mode id", () => {
+  it("offers Agent / Plan / Auto accept and posts setMode with the chosen mode id", () => {
     const { window, posted, doc } = bootWebview();
     const pop = $(doc, "mode-popover");
 
     click(window, $(doc, "mode-btn"));
     expect((pop as any).hidden).toBe(false);
     const labels = [...pop.querySelectorAll(".mode-item-label")].map((l) => l.textContent);
-    expect(labels).toEqual(["Agent mode", "Plan mode", "YOLO"]);
+    expect(labels).toEqual(["Agent mode", "Plan mode", "Auto accept"]);
 
     const planItem = [...pop.querySelectorAll(".mode-popover-item")]
       .find((el) => el.querySelector(".mode-item-label")!.textContent === "Plan mode") as HTMLElement;
@@ -473,7 +473,7 @@ describe("reasoning trace (regression: thinking traces no longer expandable)", (
 describe("Grokking… indicator (waiting placeholder)", () => {
   const grokking = (doc: Document) => doc.querySelector(".grokking") as HTMLElement | null;
 
-  it("mounts on agentStart with the Thinking-style animated label and no chevron", () => {
+  it("mounts on agentStart with a spinning orbit icon, a label, and no dots or chevron", () => {
     const { window, doc } = bootWebview();
     dispatch(window, { type: "agentStart" });
 
@@ -481,9 +481,10 @@ describe("Grokking… indicator (waiting placeholder)", () => {
     expect(el).not.toBeNull();
     const label = el!.querySelector(".grokking-label") as HTMLElement;
     expect(label.textContent).toBe("Grokking");
-    // Same animated ellipsis as the Thinking header…
-    expect(label.className).toContain("loading-dots");
-    // …but NOT expandable: no chevron, no thinking-body, not a .thinking block.
+    // The orbit icon is Grokking's motion — no blink-dots here (those are for
+    // Thinking / tools); and NOT expandable: no chevron, no body, not .thinking.
+    expect(el!.querySelector(".grokking-icon svg")).not.toBeNull();
+    expect(el!.querySelector(".blink-dots")).toBeNull();
     expect(el!.querySelector(".thinking-chevron")).toBeNull();
     expect(el!.querySelector(".thinking-body")).toBeNull();
     expect(el!.classList.contains("thinking")).toBe(false);
@@ -752,6 +753,181 @@ describe("gear menu — Other group + About / Config & debug sub-views", () => {
 
     click(h.window, itemByText(h.doc, "Show extension logs"));
     expect(types(h.posted)).toContain("showLogs");
+  });
+});
+
+describe("Auto accept mode label (#25 rename)", () => {
+  it("labels the auto-approve mode 'Auto accept' and keeps YOLO only in the description", () => {
+    const { window, doc } = bootWebview();
+    click(window, $(doc, "mode-btn"));
+    const pop = $(doc, "mode-popover");
+    const yolo = [...pop.querySelectorAll(".mode-popover-item")].find(
+      (el) => el.querySelector(".mode-item-label")?.textContent === "Auto accept",
+    ) as HTMLElement;
+    expect(yolo).toBeTruthy();
+    expect(yolo.querySelector(".mode-item-desc")?.textContent).toContain("YOLO");
+  });
+});
+
+describe("thinking traces toggle (#26)", () => {
+  it("applies the hidden body class from initialState (off by default)", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "initialState", useCtrlEnter: false, showThinking: false });
+    expect(doc.body.classList.contains("thinking-hidden")).toBe(true);
+  });
+
+  it("toggles the body class live on a showThinking message", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "showThinking", value: true });
+    expect(doc.body.classList.contains("thinking-hidden")).toBe(false);
+    dispatch(window, { type: "showThinking", value: false });
+    expect(doc.body.classList.contains("thinking-hidden")).toBe(true);
+  });
+
+  it("stands in a 'Thinking…' indicator while hidden, still building the real block", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "showThinking", value: false });
+    dispatch(window, { type: "thoughtChunk", text: "weighing options…" });
+    const ind = doc.querySelector(".thinking-indicator");
+    expect(ind).not.toBeNull();
+    expect(ind!.querySelectorAll(".blink-dots span").length).toBe(3);
+    // the real reasoning block is still built (just CSS-hidden), never lost
+    expect(doc.querySelector(".msg.thinking")).not.toBeNull();
+  });
+
+  it("shows no stand-in when traces are visible", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "showThinking", value: true });
+    dispatch(window, { type: "thoughtChunk", text: "weighing options…" });
+    expect(doc.querySelector(".thinking-indicator")).toBeNull();
+    expect(doc.querySelector(".msg.thinking")).not.toBeNull();
+  });
+
+  it("drops the stand-in when real agent text arrives", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "showThinking", value: false });
+    dispatch(window, { type: "thoughtChunk", text: "weighing…" });
+    expect(doc.querySelector(".thinking-indicator")).not.toBeNull();
+    dispatch(window, { type: "messageChunk", text: "Here's the answer." });
+    expect(doc.querySelector(".thinking-indicator")).toBeNull();
+  });
+
+  it("exposes a Show thinking traces switch in Config & debug that posts setShowThinking and flips the class", () => {
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, { type: "showThinking", value: false });
+    expect(doc.body.classList.contains("thinking-hidden")).toBe(true);
+    click(window, $(doc, "gear-btn"));
+    const cfg = [...doc.querySelectorAll("#gear-popover .toolbar-popover-item")].find(
+      (el) => el.textContent?.includes("Config & debug"),
+    ) as HTMLElement;
+    click(window, cfg);
+    const toggle = [...doc.querySelectorAll("#gear-popover .toolbar-popover-item")].find(
+      (el) => el.textContent?.includes("Show thinking traces"),
+    ) as HTMLElement;
+    expect(toggle).toBeTruthy();
+    expect(toggle.querySelector(".popover-switch")).not.toBeNull();
+    click(window, toggle);
+    expect(posted.some((p) => p.type === "setShowThinking" && p.value === true)).toBe(true);
+    expect(doc.body.classList.contains("thinking-hidden")).toBe(false); // optimistic flip
+  });
+});
+
+describe("scroll-to-bottom button (#28)", () => {
+  const setMetrics = (window: any, list: HTMLElement, top: number, height: number, client: number) => {
+    Object.defineProperty(list, "scrollHeight", { value: height, configurable: true });
+    Object.defineProperty(list, "clientHeight", { value: client, configurable: true });
+    Object.defineProperty(list, "scrollTop", { value: top, configurable: true, writable: true });
+    list.dispatchEvent(new window.Event("scroll"));
+  };
+
+  it("shows when scrolled away from the bottom and hides at the bottom (same threshold)", () => {
+    const { window, doc } = bootWebview();
+    const btn = $(doc, "scroll-bottom-btn");
+    const list = $(doc, "messages");
+    setMetrics(window, list, 0, 1000, 300); // 700px from bottom → visible
+    expect(btn.classList.contains("visible")).toBe(true);
+    setMetrics(window, list, 680, 1000, 300); // 20px from bottom (≤40) → hidden
+    expect(btn.classList.contains("visible")).toBe(false);
+  });
+
+  it("re-pins to the bottom and hides on click", () => {
+    const { window, doc } = bootWebview();
+    const btn = $(doc, "scroll-bottom-btn");
+    const list = $(doc, "messages") as any;
+    list.scrollTo = () => {}; // happy-dom has no smooth-scroll impl
+    setMetrics(window, list, 0, 1000, 300);
+    expect(btn.classList.contains("visible")).toBe(true);
+    click(window, btn);
+    expect(btn.classList.contains("visible")).toBe(false);
+  });
+});
+
+describe("continuous progress indicator (always show something mid-turn)", () => {
+  // A *live* progress affordance: Grokking / a running tool group / Thinking /
+  // plan-processing / streaming message / an open card. A CSS-hidden thinking
+  // block does NOT count (that's the whole point of the stand-in).
+  const hasLiveIndicator = (doc: Document) => {
+    if (
+      doc.querySelector(
+        ".grokking, .thinking-indicator, .tool-group.in-progress, .plan-processing, .msg.agent, .card:not(.resolved)",
+      )
+    )
+      return true;
+    // A thinking block is a live indicator only when traces are shown (a hidden
+    // one is display:none via the body class — the stand-in covers that case).
+    return !doc.body.classList.contains("thinking-hidden") && !!doc.querySelector(".msg.thinking");
+  };
+
+  // A realistic interleaved turn, mirroring how real sessions stream: start →
+  // reason → run a tool → reason → narrate → reason → narrate.
+  const STEPS: any[] = [
+    { type: "agentStart" },
+    { type: "thoughtChunk", text: "let me look at the file" },
+    { type: "thoughtChunk", text: " and weigh the options" },
+    { type: "toolCall", call: { toolCallId: "t1", kind: "read", title: "Read `/a.ts`" } },
+    { type: "toolCallUpdate", call: { toolCallId: "t1", status: "completed" } },
+    { type: "thoughtChunk", text: "now I'll edit it" },
+    { type: "messageChunk", text: "Here's what I'll do: " },
+    { type: "thoughtChunk", text: "one more consideration" },
+    { type: "messageChunk", text: "and the rest of the answer." },
+  ];
+
+  const simulate = (showThinking: boolean) => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "showThinking", value: showThinking });
+    dispatch(window, { type: "setBusy", value: true }); // a user turn is in flight
+    for (const step of STEPS) {
+      dispatch(window, step);
+      expect(
+        hasLiveIndicator(doc),
+        `blank frame after ${step.type} (showThinking=${showThinking})`,
+      ).toBe(true);
+    }
+    dispatch(window, { type: "agentEnd" }); // turn done — idle is allowed now
+  };
+
+  it("never leaves a blank frame mid-turn with thinking hidden (the default)", () => {
+    simulate(false);
+  });
+
+  it("never leaves a blank frame mid-turn with thinking shown", () => {
+    simulate(true);
+  });
+
+  it("stands in with Grokking when a step would otherwise leave nothing visible", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "setBusy", value: true }); // unlocked turn, nothing shown yet
+    expect(doc.querySelector(".grokking")).toBeNull();
+    // A bare completed-tool update with no prior group leaves nothing on its own…
+    dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "x", status: "completed" } });
+    expect(doc.querySelector(".grokking")).not.toBeNull(); // …so the safety net stands in
+  });
+
+  it("does not stand in during the locked priming window", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, { type: "setBusy", value: true, locked: true }); // priming
+    dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "x", status: "completed" } });
+    expect(doc.querySelector(".grokking")).toBeNull();
   });
 });
 

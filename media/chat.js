@@ -20,6 +20,7 @@
   const gearPopover = $("gear-popover");
   const addPopover = $("add-popover");
   const historyPopover = $("history-popover");
+  const scrollBottomBtn = $("scroll-bottom-btn");
 
   // grok's accepted reasoning-effort values, lowest → highest (matches the CLI;
   // `max` is not a real grok level and is intentionally excluded — see #3/#4).
@@ -164,6 +165,12 @@
     // (#16). Interactive activity (permission/question cards, the user's own
     // sent message) re-pins via forceScrollToBottom().
     stickToBottom: true,
+    // grok.showThinking (#26). Thinking traces are hidden by default; when hidden
+    // a lightweight "Thinking…" indicator stands in while grok reasons (and no
+    // tool/Grokking indicator is already showing). Toggle lives in gear → Config
+    // & debug. The host posts the real value on init and on config change.
+    showThinking: false,
+    thinkingIndicatorEl: null,
   };
 
   // Matches any version of the extension's primer (v1, v2, …). Used during
@@ -197,6 +204,9 @@
     cpu: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg>`,
     squarePen: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>`,
     arrowUp: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>`,
+    arrowDown: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`,
+    brain: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4"/><path d="M9 13a4.5 4.5 0 0 0 3-4"/></svg>`,
+    orbit: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.341 6.484A10 10 0 0 1 10.266 21.85"/><path d="M3.659 17.516A10 10 0 0 1 13.74 2.152"/><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/></svg>`,
     square: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>`,
     spinner: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`,
     gear: `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
@@ -231,10 +241,15 @@
     },
     yolo: {
       icon: ICON.zap,
-      label: "YOLO",
-      desc: "Grok will automatically approve all permission requests",
+      label: "Auto accept",
+      desc: "Grok automatically approves all permission requests (YOLO)",
     },
   };
+
+  // Three blinking dots — the tool rows' in-progress animation, reused by every
+  // progress indicator (Grokking / Thinking) so they all pulse the same way
+  // instead of the old morphing "…" ellipsis (#26 follow-up).
+  const BLINK_DOTS = `<span class="blink-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>`;
 
   // ---------- helpers ----------
 
@@ -280,6 +295,7 @@
   sendBtn.innerHTML = ICON.arrowUp;
   gearBtn.innerHTML = ICON.gear;
   addBtn.innerHTML = ICON.plus;
+  scrollBottomBtn.innerHTML = `${ICON.arrowDown}<span class="scroll-bottom-label">Scroll to bottom</span>`;
   updateModeBtn("agent");
 
   // ---------- markdown ----------
@@ -1098,6 +1114,18 @@
     state.gearView = "config";
     gearPopover.innerHTML = "";
     addGearItem('<span class="popover-back">← Config &amp; debug</span>', renderGearMain);
+    // Show thinking traces (#26) — a switcher; off by default keeps grok's
+    // reasoning out of the way, on reveals it (incl. on already-loaded sessions).
+    addGearItem(
+      `<span>Show thinking traces</span><span class="popover-switch${state.showThinking ? " on" : ""}" role="switch" aria-checked="${state.showThinking}"><span class="popover-switch-knob"></span></span>`,
+      () => {
+        state.showThinking = !state.showThinking;
+        applyThinkingVisibility();
+        vscode.postMessage({ type: "setShowThinking", value: state.showThinking });
+        renderConfigDebugPanel(); // re-render so the switch reflects the new state
+      },
+    );
+    addGearSep();
     addGearItem('<span>Open global config</span><span class="popover-external">↗</span>', () => {
       vscode.postMessage({ type: "openGlobalConfig" });
       closePopovers();
@@ -1473,8 +1501,10 @@
     state.suppressReplayTurn = false;
     state.skipUserBubble = false;
     state.stickToBottom = true; // a fresh/loaded session starts pinned
+    updateScrollBtn();
     hidePlanProcessing();
     hideGrokking();
+    hideThinkingIndicator();
   }
 
   function showOnboarding(mode, info) {
@@ -1805,6 +1835,7 @@
   function addToToolGroup(call) {
     clearWelcome();
     hideGrokking(); // a tool card is the first content of this turn
+    hideThinkingIndicator(); // a running tool now conveys the activity
     if (!state.activeToolGroupEl) {
       // Starting a fresh batch of tools after some agent narration: detach the
       // active agent bubble so the NEXT narration opens a new bubble *below* this
@@ -2038,6 +2069,9 @@
     if (state.suppressReplayTurn) return; // thinking inside the primer turn
     hidePlanProcessing(); // thought streaming → indicator obsolete
     hideGrokking(); // real content arrived — the Thinking block takes over
+    // Traces hidden (the default): stand in with a "Thinking…" row. While
+    // replaying a loaded session there's no live reasoning to indicate.
+    if (!state.showThinking && !state.replaying) showThinkingIndicator();
     state.activeUserEl = null;
     state.skipUserBubble = false; // marker-only verdict turn is over
     clearWelcome();
@@ -2050,7 +2084,7 @@
       hdr.className = "thinking-header";
       // Chevron on the RIGHT (after the label), same glyph as tool groups; expand
       // state is driven by the `.expanded` class (CSS rotates it), like tools.
-      hdr.innerHTML = `<span class="thinking-label loading-dots">Thinking</span><span class="thinking-chevron" aria-hidden="true">›</span>`;
+      hdr.innerHTML = `<span class="thinking-icon">${ICON.brain}</span><span class="thinking-label">Thinking</span>${BLINK_DOTS}<span class="thinking-chevron" aria-hidden="true">›</span>`;
       const body = document.createElement("div");
       body.className = "thinking-body";
       body.hidden = true;
@@ -2082,6 +2116,7 @@
     if (state.suppressReplayTurn) return; // grok's response to the primer
     hidePlanProcessing(); // agent output started — clear the indicator
     hideGrokking(); // real content arrived — the message bubble takes over
+    hideThinkingIndicator(); // a real message replaces the "Thinking…" stand-in
     state.activeUserEl = null;
     state.skipUserBubble = false; // marker-only verdict turn is over
     closeToolGroup();
@@ -2115,11 +2150,12 @@
     flushAgent();
     flushThought();
     if (state.thoughtStartTime && state.activeThoughtHdrEl) {
+      // Drop the blink-dots once the reasoning settles, and label it. Replayed
+      // turns have no real elapsed time, so they omit the seconds.
+      const dots = state.activeThoughtHdrEl.querySelector(".blink-dots");
+      if (dots) dots.remove();
       const label = state.activeThoughtHdrEl.querySelector(".thinking-label");
-      // Replayed turns have no real elapsed time, so drop the seconds. The live
-      // header animated its ellipsis via .loading-dots — strip it once settled.
       if (label) {
-        label.classList.remove("loading-dots");
         label.textContent = state.replaying
           ? "Thought"
           : `Thought for ${Math.round((Date.now() - state.thoughtStartTime) / 1000)}s`;
@@ -2127,6 +2163,7 @@
       state.thoughtStartTime = null;
     }
     closeToolGroup();
+    hideThinkingIndicator();
     state.activeAgentEl = null;
     state.activeAgentRaw = "";
     state.activeThoughtEl = null;
@@ -2266,6 +2303,7 @@
   function showPlanProcessing() {
     hidePlanProcessing(); // dedupe
     hideGrokking(); // one waiting indicator at a time
+    hideThinkingIndicator();
     clearWelcome();
     const el = document.createElement("div");
     el.className = "plan-processing";
@@ -2291,10 +2329,13 @@
   function showGrokking() {
     hideGrokking(); // dedupe
     hidePlanProcessing(); // one waiting indicator at a time
+    hideThinkingIndicator();
     clearWelcome();
     const el = document.createElement("div");
     el.className = "grokking";
-    el.innerHTML = '<span class="grokking-label loading-dots">Grokking</span>';
+    // No blink-dots here — the spinning orbit icon is Grokking's "waiting" motion
+    // (Thinking / tools use the dots for discrete progress instead).
+    el.innerHTML = `<span class="grokking-icon">${ICON.orbit}</span><span class="grokking-label">Grokking</span>`;
     el.setAttribute("aria-label", "Grok is working");
     messagesEl.appendChild(el);
     state.grokkingEl = el;
@@ -2308,11 +2349,84 @@
     state.grokkingEl = null;
   }
 
+  // "Thinking…" — the stand-in shown while thinking traces are hidden (#26, the
+  // default). grok's thought stream is suppressed from view, so this lightweight
+  // row signals it's reasoning — but only when nothing else already conveys work
+  // (no running tool group, no Grokking). Styled like a tool row: brain icon +
+  // muted label + animated loading-dots. Stable while thoughts stream; removed
+  // the moment a tool, agent message, or turn-end takes over.
+  function showThinkingIndicator() {
+    if (state.thinkingIndicatorEl) return; // already up — keep it stable
+    if (state.activeToolGroupEl) return; // a running tool already indicates work
+    hideGrokking();
+    hidePlanProcessing();
+    clearWelcome();
+    const el = document.createElement("div");
+    el.className = "thinking-indicator";
+    el.innerHTML = `<span class="thinking-indicator-icon">${ICON.brain}</span><span class="thinking-indicator-label">Thinking</span>${BLINK_DOTS}`;
+    el.setAttribute("aria-label", "Grok is thinking");
+    messagesEl.appendChild(el);
+    state.thinkingIndicatorEl = el;
+    scrollToBottom();
+  }
+
+  function hideThinkingIndicator() {
+    if (state.thinkingIndicatorEl && state.thinkingIndicatorEl.parentElement) {
+      state.thinkingIndicatorEl.parentElement.removeChild(state.thinkingIndicatorEl);
+    }
+    state.thinkingIndicatorEl = null;
+  }
+
+  // Apply the show/hide-thinking setting. A single body class hides every
+  // `.msg.thinking` block at once — so it covers replayed/old sessions too and
+  // toggling is instant with no reload — and turning traces back on drops the
+  // stand-in indicator.
+  function applyThinkingVisibility() {
+    document.body.classList.toggle("thinking-hidden", !state.showThinking);
+    if (state.showThinking) hideThinkingIndicator();
+  }
+
+  // True when *something* already tells the user grok is mid-work or awaiting
+  // them: a waiting indicator, a running tool group, streaming agent text, a
+  // visible thinking block (only counts when traces are shown — hidden ones are
+  // display:none), or an open permission/question/plan card.
+  function turnHasVisibleActivity() {
+    return !!(
+      state.grokkingEl ||
+      state.thinkingIndicatorEl ||
+      state.planProcessingEl ||
+      state.activeToolGroupEl ||
+      (state.activeAgentEl && (state.activeAgentRaw || "").trim()) ||
+      (state.showThinking && state.activeThoughtEl) ||
+      messagesEl.querySelector(".card:not(.resolved)")
+    );
+  }
+
+  // Guarantee a live turn never looks idle: while the user's turn is in flight
+  // (busy, not the locked priming window, not replaying), at least one progress
+  // affordance — Grokking / Tools / Thinking — must be on screen. If a step left
+  // nothing visible, stand in with the generic "Grokking…"; the next real chunk
+  // replaces it. Called after each mid-turn event the agent emits.
+  function ensureActivityIndicator() {
+    if (!state.busy || state.busyLocked || state.replaying) return;
+    if (turnHasVisibleActivity()) return;
+    showGrokking();
+  }
+
   // Follow streaming output only while the user is pinned to the bottom. Once
   // they scroll up (the listener below clears state.stickToBottom) this becomes
   // a no-op, so they can read history while grok keeps thinking (#16).
   function scrollToBottom() {
     if (state.stickToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // The floating "Scroll to bottom" button (#28) shows exactly when we've stopped
+  // following the bottom — same threshold that gates auto-scroll, so it appears
+  // the instant streaming output runs off-screen. It lives inside `.composer`
+  // (position:absolute over the input), so it rides the chat's `--chat-zoom`
+  // scale and stays pinned above the input area at any font scale.
+  function updateScrollBtn() {
+    scrollBottomBtn.classList.toggle("visible", !state.stickToBottom);
   }
 
   // Always pull the view to the bottom and re-pin. For interactive activity the
@@ -2321,12 +2435,31 @@
   function forceScrollToBottom() {
     state.stickToBottom = true;
     messagesEl.scrollTop = messagesEl.scrollHeight;
+    updateScrollBtn();
   }
 
+  // While a click-triggered smooth scroll is animating, the intermediate scroll
+  // events would briefly re-show the button; suppress recompute until we land.
+  let autoScrolling = false;
   messagesEl.addEventListener("scroll", () => {
+    if (autoScrolling) {
+      if (messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 4) {
+        autoScrolling = false;
+      } else {
+        return;
+      }
+    }
     state.stickToBottom = shouldStickToBottom(
       messagesEl.scrollTop, messagesEl.scrollHeight, messagesEl.clientHeight);
+    updateScrollBtn();
   });
+
+  scrollBottomBtn.onclick = () => {
+    autoScrolling = true;
+    state.stickToBottom = true;
+    updateScrollBtn();
+    messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: "smooth" });
+  };
 
   // ---------- permission card ----------
 
@@ -3091,6 +3224,13 @@
 
   // ---------- inbound ----------
 
+  // Mid-turn events the agent emits while producing output. After each one we
+  // re-assert that some progress indicator is visible (ensureActivityIndicator).
+  // promptComplete is deliberately omitted — it's the turn-end boundary.
+  const TURN_PROGRESS_MSGS = new Set([
+    "agentStart", "thoughtChunk", "messageChunk", "toolCall", "toolCallUpdate", "media",
+  ]);
+
   window.addEventListener("message", (e) => {
     const msg = e.data;
     switch (msg.type) {
@@ -3099,6 +3239,15 @@
         state.effort = msg.effort || "";
         state.cwd = msg.cwd || "";
         state.extVersion = msg.extVersion || "";
+        if (typeof msg.showThinking === "boolean") state.showThinking = msg.showThinking;
+        applyThinkingVisibility();
+        break;
+      case "showThinking":
+        // Live toggle (grok.showThinking). Initial value also arrives via
+        // initialState + is baked into the <body class> by the host to avoid a flash.
+        state.showThinking = !!msg.value;
+        applyThinkingVisibility();
+        if (state.gearView === "config") renderConfigDebugPanel(); // keep the switch in sync
         break;
       case "fontScale":
         // Live chat-only zoom (grok.chatFontScale). Initial value is baked into
@@ -3417,6 +3566,7 @@
       case "agentReset": {
         hidePlanProcessing(); // turn is being reset, indicator no longer applies
         hideGrokking();
+        hideThinkingIndicator();
         // Drop the in-flight agent bubble entirely. Used when the host wants to
         // suppress the rest of the current turn (e.g. after Reject, where
         // grok's false "approved" response would otherwise leak through).
@@ -3437,6 +3587,7 @@
       }
       case "agentError":
         hideGrokking(); // turn ended (possibly before any content)
+        hideThinkingIndicator();
         addError(msg.text);
         state.busy = false;
         updateSendButton();
@@ -3444,6 +3595,7 @@
         break;
       case "agentEnd":
         hideGrokking(); // turn ended (defensive — content normally clears it first)
+        hideThinkingIndicator();
         state.busy = false;
         updateSendButton();
         flushVoiceQueue(); // send anything dictated while Grok was responding
@@ -3550,6 +3702,11 @@
         if (!historyPopover.hidden) patchSessionDot(msg.id);
         break;
     }
+    // After any step grok takes mid-turn, make sure the chat still shows it's
+    // working — never a dead frame while a turn is unfinished (esp. with thinking
+    // traces hidden). The turn-end boundary (promptComplete) is excluded so the
+    // stand-in doesn't flash between it and agentEnd.
+    if (TURN_PROGRESS_MSGS.has(msg.type)) ensureActivityIndicator();
   });
 
   // ---------- wire ----------

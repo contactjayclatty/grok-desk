@@ -39,4 +39,4 @@ A few things look like slash commands but are surfaced through the extension UI,
 
 - **New session** — sidebar `+` button (`Grok: New Session` from the command palette)
 - **Plan mode** — mode picker in the bottom toolbar; enabled and enforced client-side (Grok proposes a plan; workspace writes and non-read-only commands are blocked until you approve — see [src/plan-gate.ts](../src/plan-gate.ts) and [src/grok-primer.ts](../src/grok-primer.ts))
-- **YOLO mode** — mode picker; toggles auto-approval on the client side
+- **Auto accept (YOLO)** — mode picker; toggles auto-approval on the client side

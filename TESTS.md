@@ -172,7 +172,7 @@ happy-dom test locking in the native-Windows regressions this build fixed (plus 
 
 - **History popover** — opens on the history button (and requests the session list), toggles closed on re-click, closes on an outside click but stays open on a click inside it
 - **Session rows** — whole row resumes (clicking the meta area, not just the label, posts `resumeSession`); the delete and rename action buttons `stopPropagation` so they don't *also* resume
-- **Mode picker** — offers Agent / Plan / YOLO, posts `setMode` with the chosen id, closes on select, toggles closed on re-click
+- **Mode picker** — offers Agent / Plan / Auto accept, posts `setMode` with the chosen id, closes on select, toggles closed on re-click
 - **Reasoning trace** — a thought chunk renders a collapsed thinking block whose header click toggles the body open/closed (chevron ▶/▼)
 - **Gear settings lock** — the model button shows the friendly name (not the raw id); model + effort controls are disabled while busy/priming and re-enable when busy clears
 - **User-message dedup** — a `user_message_chunk` echoed live (grok ≥0.2.33) never doubles the optimistic bubble; only a `session/load` replay drives user bubbles

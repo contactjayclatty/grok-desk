@@ -31,6 +31,7 @@ export const BODY = `
     </div>
   </main>
   <footer class="composer">
+    <button id="scroll-bottom-btn" class="scroll-bottom-btn"></button>
     <div class="composer-input-wrap">
       <div id="input-highlight"></div>
       <textarea id="input"></textarea>

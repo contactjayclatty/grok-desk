@@ -2,7 +2,7 @@
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
   "description": "VS Code client for xAI's Grok Build CLI — review edits in a diff before approving, @-mention files, resumable history, inline image/video, and voice. Requires the Grok Build CLI plus a SuperGrok or X Premium+ subscription (or an xAI API key). MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.4.22",
+  "version": "1.4.23",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -154,6 +154,17 @@
           "default": "",
           "description": "Model ID to use on new sessions. Empty = CLI default."
         },
+        "grok.defaultMode": {
+          "type": "string",
+          "enum": ["", "agent", "yolo"],
+          "enumDescriptions": [
+            "Agent mode (CLI default)",
+            "Agent mode",
+            "Auto accept — auto-approve every permission request"
+          ],
+          "default": "",
+          "description": "Mode for new sessions. Updated automatically to remember your last switch between Agent and Auto accept (Plan is never remembered). Empty = Agent."
+        },
         "grok.includeActiveFileByDefault": {
           "type": "boolean",
           "default": true,
@@ -186,6 +197,11 @@
           "type": "boolean",
           "default": false,
           "description": "Use Ctrl/Cmd+Enter to send (Enter inserts newline)."
+        },
+        "grok.showThinking": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show Grok's reasoning (thinking) traces in chat. Off by default — a lightweight \"Thinking…\" indicator stands in while Grok reasons. Also toggleable live from the gear menu → **Config & debug → Show thinking traces** (applies to already-loaded sessions too)."
         },
         "grok.chatFontScale": {
           "type": "number",

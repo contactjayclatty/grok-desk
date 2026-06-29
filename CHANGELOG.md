@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.23 — 2026-06-29
+
+> Hidden-by-default thinking traces with an always-on progress indicator, a scroll-to-bottom button, a remembered mode preference, and the YOLO → Auto accept rename.
+
+### Added
+
+- **Thinking traces are hidden by default (#26).** Grok's reasoning no longer fills the chat — a muted **Thinking…** stand-in (brain icon) shows while it reasons. Turn traces back on from gear → **Config & debug → Show thinking traces** (a live switch backed by `grok.showThinking`); it reveals them on already-loaded sessions too. When shown, a thinking row now matches the tool rows — same font size, a leading **brain icon**, and the shared chevron + hover (it was a smaller 11px and icon-less). ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css), [src/sidebar.ts](src/sidebar.ts), [package.json](package.json))
+- **The chat always shows live progress during a turn.** While a turn is in flight, one of **Grokking / a running tool / Thinking…** is guaranteed on screen — no dead frames, even with traces hidden. ([media/chat.js](media/chat.js))
+- **Scroll to bottom (#28).** A floating button appears above the composer once you scroll up off the bottom; click it for an animated jump back down. It's anchored to the chat input area, so it stays correctly placed at any `chatFontScale` zoom. ([src/sidebar.ts](src/sidebar.ts), [media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **New sessions remember your last mode (#25).** The last switch between **Agent** and **Auto accept** is reapplied on new sessions (Plan is deliberately never remembered), mirroring how model & effort already persist. It's applied up-front, so the toolbar shows the right mode from the first paint — no Agent → Auto accept flash while the session primes. Backed by `grok.defaultMode`. ([src/sidebar.ts](src/sidebar.ts), [package.json](package.json))
+
+### Changed
+
+- **The progress indicators now share one look.** *Grokking*, the *Thinking…* stand-in, and a running tool all use the editor font size, a 15px leading icon, and the same muted color + spacing — a running tool no longer brightens to look hovered. Motion is per-indicator: *Grokking* spins a lucide **orbit** icon (it's a generic wait), while *Thinking* and tools use the **three blinking dots** (discrete progress) — both replacing the old morphing "…" pills. ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **Renamed the "YOLO" mode to "Auto accept."** The mode picker and the bottom-toolbar button now read **Auto accept**; "YOLO" survives only in the picker's one-line description. The internal mode id (`yolo`) and `autoApprove` flag are unchanged. ([media/chat.js](media/chat.js))
+- **A user message's copy + timestamp now appear on hover** (the bubble or the row beneath it), matching grok messages — they used to always show. ([media/chat.css](media/chat.css))
+- **Trimmed the README feature descriptions** that already carry a screenshot, cutting the redundant "what it looks like" prose. ([README.md](README.md))
+
+### Tests — 599
+
+- New: the Auto accept label, the thinking-traces toggle (hidden-by-default body class, live flip, the **Thinking…** stand-in vs. a visible trace, the Config & debug switch), the Grokking orbit indicator, the scroll-to-bottom visibility threshold + click, and a **step-by-step turn simulation** asserting a live progress indicator after every mid-turn event with traces hidden *and* shown ([test/webview-ui.dom.test.ts](test/webview-ui.dom.test.ts), [test/webview-harness.ts](test/webview-harness.ts)); the remembered-mode policy `modeToRemember`/`startsInYolo` — Plan never persisted, applied to new sessions only (#25) ([test/mode-prefs.test.ts](test/mode-prefs.test.ts)).
+
 ## 1.4.22 — 2026-06-29
 
 > Single-home the sidebar so it can be moved in Cursor, and stop forcing whole-file reads on attachments.

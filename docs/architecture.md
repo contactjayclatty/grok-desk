@@ -238,9 +238,10 @@ the steady-state fix.
   Node process. That's *why* the bulk of protocol behavior can be regression-
   tested without launching VS Code or the `grok` binary. See
   [TESTS.md](../TESTS.md).
-- **YOLO is client-side only.** A single `autoApprove` flag — toggling Agent ↔
-  YOLO doesn't restart the CLI or even send a message. When the CLI raises a
-  permission request, the extension just answers "allow always" automatically.
+- **Auto accept (YOLO) is client-side only.** A single `autoApprove` flag —
+  toggling Agent ↔ Auto accept doesn't restart the CLI or even send a message.
+  When the CLI raises a permission request, the extension just answers "allow
+  always" automatically.
 - **Cross-platform without per-OS branches.** `terminal-manager.ts` uses
   `spawn(cmd, { shell: true })` so Node picks `cmd.exe` or `/bin/sh`;
   `cli-locator.ts` prefers `HOME`/`USERPROFILE` env over `os.homedir()` so tests
