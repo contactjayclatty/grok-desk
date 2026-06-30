@@ -330,9 +330,49 @@ export class AcpClient extends EventEmitter {
     this.writeLine(makeQuestionCancelledResponse(requestId));
   }
 
-  dispose(): void {
+  /**
+   * Tear the process down, resolving only once it has *actually* exited — a
+   * caller that must replace the binary (`grok update`) can't race a still-open
+   * Windows file lock on `grok.exe`. `kill()` only signals; the OS releases the
+   * lock a beat later when the process finishes tearing down. On win32 the grok
+   * agent backgrounds subagent / command children that a parent-only kill would
+   * orphan (and which keep the executable locked), so kill the whole tree via
+   * `taskkill /T /F`. Resolves on the `exit` event, or after `timeoutMs` as a
+   * fallback so a wedged process can't hang the caller forever. Fire-and-forget
+   * callers can ignore the returned promise — the kill is still initiated now.
+   */
+  dispose(timeoutMs = 3000): Promise<void> {
     this.rl?.close();
-    try { this.proc?.kill(); } catch { /* already gone */ }
+    const proc = this.proc;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      try { proc?.kill(); } catch { /* already gone */ }
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      proc.once("exit", finish);
+      const fallbackKill = () => { try { proc.kill(); } catch { finish(); } };
+      if (process.platform === "win32" && proc.pid !== undefined) {
+        // Parent-only kill orphans grok's backgrounded children, which keep
+        // grok.exe locked; `/T` kills the tree, `/F` forces it. Fall back to a
+        // plain signal if taskkill can't be spawned.
+        try {
+          const tk = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"]);
+          tk.on("error", fallbackKill);
+        } catch {
+          fallbackKill();
+        }
+      } else {
+        fallbackKill();
+      }
+    });
   }
 
   // ---------- internals ----------

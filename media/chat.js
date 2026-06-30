@@ -1668,6 +1668,20 @@
     if (p === "." || p === "./") return "root folder";
     return p.split("/").pop() || p;
   }
+  // Directory target for a list_dir call. Unlike prettyPath (basename only, right
+  // for files), a folder reads better as its full *relative* path with a trailing
+  // slash — "docs/screenshots/" not "screenshots". grok passes list_dir paths
+  // relative to cwd, so we can show them whole; an absolute path (rare — the
+  // webview can't know the workspace root) falls back to its leaf so we never
+  // render a long machine path.
+  function prettyDir(p) {
+    if (!p) return "";
+    let s = String(p).replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
+    if (s === "" || s === ".") return "root folder";
+    const isAbs = s.startsWith("/") || /^[A-Za-z]:\//.test(s);
+    if (isAbs) s = s.split("/").pop();
+    return s + "/";
+  }
   // grok finalizes a tool call's kind over an update, but the *initial* tool_call
   // (and the persisted replay form) often arrives with `kind` missing and only a
   // leading-verb title ("Shell", "Grep", "Glob", "Read", "Write", "Delete").
@@ -1729,7 +1743,7 @@
     const kind = toolKind(call);
     const filePath = toolFilePath(call);
     if (/^(list_dir|list_directory)$/.test(name)) {
-      return filePath ? `Listing ${prettyPath(filePath)}` : "Listing files";
+      return filePath ? `Listing ${prettyDir(filePath)}` : "Listing files";
     }
     if (/^(read_file|file_read)$/.test(name) || kind === "read") {
       return filePath ? `Reading ${prettyPath(filePath)}` : "Reading file";
@@ -1772,13 +1786,15 @@
     } else if (url) {
       target = clamp(url.replace(/^https?:\/\//i, ""));
     } else if (filePath) {
-      const base = prettyPath(filePath);
+      const isList = /^(list_dir|list_directory)$/.test(name) || verb === "List";
       const isRead = name === "read_file" || name === "file_read" || kind === "read";
-      if (isRead && r.offset != null && r.limit != null) {
+      if (isList) {
+        target = prettyDir(filePath);
+      } else if (isRead && r.offset != null && r.limit != null) {
         const end = Number(r.offset) + Number(r.limit) - 1;
-        target = `${base} lines ${r.offset}-${end}`;
+        target = `${prettyPath(filePath)} lines ${r.offset}-${end}`;
       } else {
-        target = base;
+        target = prettyPath(filePath);
       }
     } else if (command) {
       target = clamp(command);

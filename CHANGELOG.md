@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.26 — 2026-06-30
+
+### Fixed
+
+- **Updating the Grok Build CLI no longer fails with "cannot rename locked executable."** The update tore the session pool down but didn't *wait* for the grok processes to actually exit, so `grok update` raced the still-held Windows lock on `grok.exe` (`Access is denied. (os error 5)`). Teardown now resolves only once each process has truly exited, kills the whole process **tree** on Windows (`taskkill /T /F`, so grok's backgrounded subagent/command children don't keep the binary locked), and the update retries once if a lingering lock slips through. ([src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts), [src/cli-locator.ts](src/cli-locator.ts))
+
+### Changed
+
+- **Directory listings show the full relative path with a trailing slash** — `List docs/` and `List docs/screenshots/` instead of the basename-only `List screenshots`. ([media/chat.js](media/chat.js))
+
 ## 1.4.25 — 2026-06-30
 
 ### Fixed

@@ -10,6 +10,7 @@ import {
   compareVersionTuple,
   grokUpdatePolicy,
   shouldReactivelyDowngrade,
+  isLockedBinaryError,
   GROK_STDIO_DOWNGRADE_TARGET,
 } from "../src/cli-locator";
 
@@ -197,5 +198,27 @@ describe("shouldReactivelyDowngrade (issue #22 — backstop for a future build a
   it("leaves an unparseable version alone (no spurious downgrade)", () => {
     expect(shouldReactivelyDowngrade("grok (dev build)", "win32")).toBe(false);
     expect(shouldReactivelyDowngrade("", "win32")).toBe(false);
+  });
+});
+
+describe("isLockedBinaryError (CLI-update lock retry)", () => {
+  it("detects grok's real locked-executable failure (worth a retry)", () => {
+    const real =
+      "Command failed: C:\\Users\\Dell\\.grok\\bin\\grok.exe update\n" +
+      "Error: Auto-update failed: cannot rename locked executable " +
+      "C:\\Users\\Dell\\.grok\\bin\\grok.exe: Access is denied. (os error 5)";
+    expect(isLockedBinaryError(real)).toBe(true);
+  });
+
+  it("matches each lock signature independently and is case-insensitive", () => {
+    expect(isLockedBinaryError("cannot rename LOCKED EXECUTABLE")).toBe(true);
+    expect(isLockedBinaryError("Access is Denied.")).toBe(true);
+    expect(isLockedBinaryError("failed (os error 5)")).toBe(true);
+  });
+
+  it("does not match unrelated update failures (those are real, no retry)", () => {
+    expect(isLockedBinaryError("network timeout while downloading grok")).toBe(false);
+    expect(isLockedBinaryError("ENOENT: grok not found")).toBe(false);
+    expect(isLockedBinaryError("")).toBe(false);
   });
 });

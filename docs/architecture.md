@@ -122,7 +122,13 @@ gray — and re-clicking the row reloads the session from disk.
 One safety valve sits next to this: the explicit **Update Grok Build CLI** action
 tears down every live session to swap the binary, so it now confirms first if any
 session is `working` or `needs-you` (the silent startup auto-update runs before
-anything is in flight, so it doesn't ask).
+anything is in flight, so it doesn't ask). The teardown is **awaited** before
+`grok update` runs — `kill()` only signals, and on Windows the `grok.exe` lock
+clears a beat after the process actually exits, so an un-awaited update would race
+it and fail with *"cannot rename locked executable"*. On Windows the kill is a
+`taskkill /T /F` of the process **tree** (grok backgrounds subagent/command
+children that a parent-only kill would orphan, and they keep the binary locked),
+and the update retries once if a lingering lock still slips through.
 
 ## Plan Mode — the one part that isn't thin
 

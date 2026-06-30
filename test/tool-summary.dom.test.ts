@@ -73,11 +73,18 @@ describe("tool-call labels (single-call flat line)", () => {
 
   // The live first tool_call carries title = raw tool name + the parsed rawInput;
   // these field names are verified against real on-disk sessions.
-  it("list_dir shows the folder via target_directory ('List <dir>')", () => {
+  it("list_dir shows the folder via target_directory, with a trailing slash", () => {
     const { window, doc } = bootWebview();
     dispatch(window, tc({ toolCallId: "1", title: "list_dir", rawInput: { target_directory: "docs" } }));
     close(window);
-    expect(flatLabel(doc)).toBe("List docs");
+    expect(flatLabel(doc)).toBe("List docs/");
+  });
+
+  it("list_dir keeps the full relative path (not just the leaf)", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, tc({ toolCallId: "1", title: "list_dir", rawInput: { target_directory: "docs/screenshots" } }));
+    close(window);
+    expect(flatLabel(doc)).toBe("List docs/screenshots/");
   });
 
   it("list_dir on '.' reads as 'List root folder'", () => {

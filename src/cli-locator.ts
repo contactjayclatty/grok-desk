@@ -143,3 +143,16 @@ export function shouldReactivelyDowngrade(versionOutput: string, platform: NodeJ
   const target = parseGrokVersion(GROK_STDIO_DOWNGRADE_TARGET)!;
   return compareVersionTuple(v, target) > 0;
 }
+
+/**
+ * Does a failed `grok update` error mean the binary was still locked? On Windows
+ * `grok update` renames `grok.exe` in place, which fails while any grok process
+ * (or a backgrounded subagent child) still holds it open — the OS releases the
+ * lock a beat after the process is killed, so a too-eager update races it. grok
+ * reports this as *"cannot rename locked executable … Access is denied. (os error
+ * 5)"*. Used to decide whether a retry is worth it (the lock clears on its own);
+ * any other failure is real and shouldn't be retried. Pure.
+ */
+export function isLockedBinaryError(message: string): boolean {
+  return /locked executable|os error 5|access is denied/i.test(message);
+}

@@ -27,6 +27,7 @@ import {
   parseGrokVersion,
   grokUpdatePolicy,
   shouldReactivelyDowngrade,
+  isLockedBinaryError,
   GROK_STDIO_DOWNGRADE_TARGET,
 } from "./cli-locator";
 import { TerminalManager } from "./terminal-manager";
@@ -870,7 +871,7 @@ See design doc for the full state machine diagram.`;
     // Tear down every live session first so no client's `exit` (or in-flight
     // turn) races the onboarding state we're about to show, then reset focus to a
     // fresh, unstarted session.
-    this.disposePool();
+    await this.disposePool();
     this.focused = new Session();
     const term = vscode.window.createTerminal("Grok Logout");
     term.sendText(`"${cliPath}" logout`);
@@ -880,7 +881,7 @@ See design doc for the full state machine diagram.`;
 
   dispose(): void {
     if (this.reaper) { clearInterval(this.reaper); this.reaper = undefined; }
-    this.disposePool();
+    void this.disposePool();
     this.editorWatcher?.dispose();
     this.configWatcher?.dispose();
     this.terminalManager.disposeAll();
@@ -1100,20 +1101,41 @@ See design doc for the full state machine diagram.`;
     // on Windows), so tear the whole pool down before the update replaces the
     // executable, then resume the focused session on the fresh binary. Other
     // backgrounded sessions go cold — re-focusing one reloads it from disk.
-    this.disposePool();
+    // AWAIT the teardown: kill() only *signals*, and on Windows the OS releases
+    // the grok.exe lock a beat after the process actually exits — running the
+    // update before that loses the rename with "cannot rename locked executable".
     this.focused = new Session();
     this.post({ type: "clearMessages" });
     this.post({ type: "cliUpdating" });
-    try {
-      const { stdout, stderr } = await execFileAsync(cliPath, updateArgs, { timeout: 180_000 });
-      if (stdout?.trim()) this.output.appendLine(stdout.trim());
-      if (stderr?.trim()) this.output.appendLine(stderr.trim());
-    } catch (e) {
-      this.output.appendLine(`grok update failed: ${(e as Error).message}`);
-      void vscode.window.showWarningMessage(`Grok Build update failed: ${(e as Error).message}`);
-    }
+    await this.disposePool();
+    await this.runGrokUpdate(cliPath, updateArgs);
     // Respawn on the (possibly) updated binary, resuming the same session.
     await this.startSession(resumeId);
+  }
+
+  /** Run `grok update`, retrying once on the Windows "locked executable" error.
+   *  Even after awaiting the pool teardown a lingering file lock can outlive the
+   *  killed processes by a beat (antivirus / handle cleanup); a short pause-and-
+   *  retry clears it. Any non-lock failure is real and surfaces immediately. */
+  private async runGrokUpdate(cliPath: string, updateArgs: string[]): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { stdout, stderr } = await execFileAsync(cliPath, updateArgs, { timeout: 180_000 });
+        if (stdout?.trim()) this.output.appendLine(stdout.trim());
+        if (stderr?.trim()) this.output.appendLine(stderr.trim());
+        return;
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (attempt === 0 && isLockedBinaryError(msg)) {
+          this.output.appendLine("grok update hit a locked binary; pausing then retrying once…");
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        this.output.appendLine(`grok update failed: ${msg}`);
+        void vscode.window.showWarningMessage(`Grok Build update failed: ${msg}`);
+        return;
+      }
+    }
   }
 
   /** Confirm a restart for a setting that only applies on a fresh session
@@ -3018,14 +3040,19 @@ See design doc for the full state machine diagram.`;
     this.pushDot(session);
   }
 
-  /** Tear down every live session (logout, CLI update, extension teardown). */
-  private disposePool(): void {
+  /** Tear down every live session (logout, CLI update, extension teardown).
+   *  Resolves once every process has actually exited — the CLI-update path awaits
+   *  this so `grok update` doesn't race a still-locked grok.exe (see dispose()).
+   *  Fire-and-forget callers (the sync VS Code disposable) can drop the promise. */
+  private disposePool(): Promise<void> {
+    const closing: Promise<void>[] = [];
     for (const s of this.pool) {
       s.gen++;
-      s.client?.dispose();
+      if (s.client) closing.push(s.client.dispose());
       s.client = undefined;
     }
     this.pool.clear();
+    return Promise.all(closing).then(() => undefined);
   }
 
   /** Start a brand-new session, keeping the current one alive in the background. */

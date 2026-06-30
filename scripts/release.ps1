@@ -43,6 +43,13 @@ Set-Location $root
 function Step($t) { Write-Host "==> $t" -ForegroundColor Cyan }
 function Run($label, [scriptblock]$cmd) {
   Step $label
+  # The success signal for an external tool is its EXIT CODE, not whether it wrote
+  # to stderr. Under the script-level $ErrorActionPreference="Stop", PowerShell 5.1
+  # turns ANY native-command stderr into a terminating error — so a clean exit-0
+  # `npm test` aborted the gate just for printing Vite's CJS deprecation warning.
+  # Make stderr non-fatal for the command (function-local; reverts on return) and
+  # judge it solely on $LASTEXITCODE.
+  $ErrorActionPreference = "Continue"
   & $cmd
   if ($LASTEXITCODE) { throw "$label failed (exit $LASTEXITCODE)" }
 }
