@@ -1975,6 +1975,25 @@
     scrollToBottom();
   }
 
+  // Extract any `type:"diff"` blocks from a tool call's `content` and attach the
+  // "N → M lines" + "open diff →" preview. grok delivers the diff differently by
+  // path: LIVE it rides a `tool_call_update` (the `tool_call` is a bare
+  // "StrReplace" with no content), but on session/load REPLAY the whole edit
+  // collapses into a single completed `tool_call` that carries the diff itself —
+  // there is no separate update. So this must run for BOTH message kinds, else a
+  // restored edit shows an expandable group with no diff inside it (#30).
+  function applyToolDiffs(call) {
+    const c = call?.content;
+    if (!Array.isArray(c)) return;
+    for (const item of c) {
+      if (item?.type === "diff") {
+        const diff = { path: item.path, oldText: item.oldText ?? "", newText: item.newText ?? "" };
+        state.pendingDiffByToolCallId.set(call.toolCallId, diff);
+        attachDiffPreviewToToolItem(call.toolCallId, diff);
+      }
+    }
+  }
+
   // Render a tool failure on its row: the row goes error-colored and the reason
   // (grok's "image reference not readable: …" etc.) shows beneath it. Idempotent.
   function applyToolFailure(rowEl, message) {
@@ -3580,6 +3599,10 @@
           break;
         }
         addToToolGroup(msg.call);
+        // On session/load a completed edit replays as a single `tool_call` that
+        // already carries its diff (no follow-up update) — attach the preview here
+        // or the restored edit has no "open diff →" (#30).
+        applyToolDiffs(msg.call);
         // Resume: if this tool was permission-gated, drop the restored (collapsed)
         // card right here — exactly where it was answered — instead of at the turn
         // boundary.
@@ -3622,20 +3645,7 @@
           markToolFailed(msg.call?.toolCallId, failure);
           break;
         }
-        const c = msg.call?.content;
-        if (Array.isArray(c)) {
-          for (const item of c) {
-            if (item?.type === "diff") {
-              const diff = {
-                path: item.path,
-                oldText: item.oldText ?? "",
-                newText: item.newText ?? "",
-              };
-              state.pendingDiffByToolCallId.set(msg.call.toolCallId, diff);
-              attachDiffPreviewToToolItem(msg.call.toolCallId, diff);
-            }
-          }
-        }
+        applyToolDiffs(msg.call);
         break;
       }
       case "permissionRequest":

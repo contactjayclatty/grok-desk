@@ -283,6 +283,59 @@ async function testRestore() {
   } finally { b.kill(); }
 }
 
+// #30: an edit's "open diff →" preview must survive a session restore. It's built
+// from a `content:[{type:"diff", oldText, newText}]` block on the edit's tool call.
+// grok delivers that block on DIFFERENT messages by path — LIVE on a follow-up
+// `tool_call_update` (the `tool_call` is a bare "StrReplace" with no content), but
+// on session/load REPLAY the whole edit collapses into a single completed
+// `tool_call` that carries the diff itself. media/chat.js now extracts diffs from
+// BOTH message kinds. This asserts the wire the fix relies on: an edit both live
+// AND on reload must surface a structured diff. A DOM test can't catch a drift
+// here — it can only assume a shape (the original #30 test assumed the wrong one).
+function editDiffUpdate(updates) {
+  return updates.find((u) =>
+    (u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update") &&
+    Array.isArray(u.content) && u.content.some((c) => c && c.type === "diff" && (c.oldText != null || c.newText != null)));
+}
+async function testEditDiffRestore() {
+  const cwd = mkTmp("editdiff");
+  const file = path.join(cwd, "note.md");
+  const MARK = "<!-- DELETE-ME-LINE -->";
+  fs.writeFileSync(file, `# Note\n\n${MARK}\n\nKeep this line.\n`);
+
+  // 1) fresh process: have grok remove the marker line (a single edit).
+  const a = new Acp(cwd);
+  let sessionId, liveDiff;
+  try {
+    await withTimeout(a.send("initialize", INIT), 30000, "init");
+    const ns = await withTimeout(a.send("session/new", { cwd, mcpServers: [] }), 30000, "new");
+    assert(ns.result && ns.result.sessionId, "session/new failed");
+    sessionId = ns.result.sessionId;
+    await withTimeout(a.send("session/prompt", {
+      sessionId,
+      prompt: [{ type: "text", text: `In note.md, delete the line containing \`${MARK}\`. Make just that one edit. Do not explain.` }],
+    }), 120000, "edit prompt");
+    liveDiff = editDiffUpdate(a.updates);
+  } finally { a.kill(); }
+
+  if (!liveDiff) throw new Skip("grok did not emit a structured edit diff live (chose a different edit path) — nothing to assert on restore");
+  await new Promise((r) => setTimeout(r, 800)); // let grok flush the session to disk
+
+  // 2) brand-new process: load the session and assert the replayed edit STILL
+  // carries the structured diff (the regression: it used to arrive only on the
+  // completed tool_call, which chat.js didn't inspect for diffs).
+  const b = new Acp(cwd);
+  try {
+    await withTimeout(b.send("initialize", INIT), 30000, "init2");
+    const load = await withTimeout(b.send("session/load", { sessionId, cwd, mcpServers: [] }), 60000, "session/load");
+    assert(!load.error, "session/load errored: " + JSON.stringify(load.error));
+    await new Promise((r) => setTimeout(r, 400)); // drain trailing replay updates
+    const replayDiff = editDiffUpdate(b.updates);
+    assert(replayDiff, `restore dropped the structured edit diff the "open diff" preview needs (replay had ${b.updates.length} updates, none an edit with type:diff content) — #30 regression`);
+    return `edit diff present live (${liveDiff.sessionUpdate}) and on restore (${replayDiff.sessionUpdate})`;
+  } finally { b.kill(); }
+}
+
 async function testPlanMode() {
   const cwd = mkTmp("plan");
   fs.writeFileSync(path.join(cwd, "app.js"), "function add(a,b){return a+b}\nmodule.exports={add}\n");
@@ -434,6 +487,7 @@ const TESTS = [
   { name: "handshake", fn: testHandshake, slow: false },
   { name: "prompt-roundtrip", fn: testPrompt, slow: false },
   { name: "session-restore", fn: testRestore, slow: false },
+  { name: "edit-diff-restore", fn: testEditDiffRestore, slow: false },
   { name: "plan-mode", fn: testPlanMode, slow: false },
   { name: "image-gen", fn: testImage, slow: true },
   // video-gen is opt-in only (run with --only=video-gen). In this headless harness

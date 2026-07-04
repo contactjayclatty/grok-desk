@@ -70,21 +70,25 @@ describe("single-edit tool group stays expandable (#30)", () => {
     expect(doc.querySelector(".tool-group")).toBeNull();
   });
 
-  it("survives restore: the eager close before the diff keeps the group expandable", () => {
-    const { window, doc } = bootWebview();
+  it("survives restore: a completed edit that carries its own diff still shows 'open diff'", () => {
+    const { window, posted, doc } = bootWebview();
 
-    // Replay a resumed session with a permission-gated single edit. On restore,
-    // renderRestoredPermissionForTool closes the group the instant the edit's
-    // tool_call replays — BEFORE the tool_call_update carrying the diff. If that
-    // close flattened the group, the diff would attach to an orphaned node and be
-    // lost after restart. It must stay a group so the later diff lands in the body.
+    // grok's REAL session/load wire (captured from the live CLI, 0.2.82): a
+    // completed edit replays as a SINGLE `tool_call` — kind:"edit",
+    // status:"completed" — that carries the diff in its own `content`. There is
+    // NO follow-up `tool_call_update` (unlike live, where the tool_call is a bare
+    // "StrReplace" and the diff rides a later update). So the diff extraction must
+    // run on the `tool_call` itself; if it only ran on `tool_call_update` (the old
+    // bug), the restored edit kept its expandable group but had no diff inside —
+    // exactly the "diff disappears on restore" report (#30).
+    const REPLAYED_EDIT = { ...EDIT_CALL, status: "completed", content: [DIFF] };
+
     dispatch(window, { type: "historyReplay", active: true });
     dispatch(window, {
       type: "permissionHistoryQueue",
       permissions: [{ toolCallId: "tc1", title: "Edit src/foo.ts", outcome: "allowed" }],
     });
-    dispatch(window, { type: "toolCall", call: EDIT_CALL }); // → addToToolGroup + eager closeToolGroup
-    dispatch(window, { type: "toolCallUpdate", call: { toolCallId: "tc1", content: [DIFF] } });
+    dispatch(window, { type: "toolCall", call: REPLAYED_EDIT }); // single message, diff included
     dispatch(window, { type: "historyReplay", active: false });
 
     const group = doc.querySelector(".tool-group");
@@ -93,6 +97,13 @@ describe("single-edit tool group stays expandable (#30)", () => {
     const link = group!.querySelector(".tool-group-body .preview-link") as HTMLButtonElement;
     expect(link).not.toBeNull();
     expect(link.textContent).toContain("open diff");
+    expect(group!.querySelector(".tool-item-subtitle")!.textContent).toContain("2 → 3 lines");
+
+    click(window, link);
+    const openDiffs = posted.filter((m: any) => m.type === "openDiff");
+    expect(openDiffs).toHaveLength(1);
+    expect(openDiffs[0]).toMatchObject({ path: "src/foo.ts", oldText: "a\nb", newText: "a\nB\nc" });
+
     // The answered permission card replays right at the tool it gated.
     expect(doc.querySelector(".card.permission.perm-resolved")).not.toBeNull();
   });
