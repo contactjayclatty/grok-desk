@@ -4120,6 +4120,19 @@
     if (document.hidden) closePopovers();
   });
 
+  // Focus the input the moment the panel opens — the caret should already be
+  // blinking in the box before the first click (matches Claude Code / Codex).
+  // The webview is rebuilt on every re-show (no retainContextWhenHidden), so
+  // the boot-time focus covers "reopened" too; the window-focus hook covers
+  // clicking back into a panel that stayed alive. Only claim focus when it
+  // landed on <body> (i.e. nowhere) — a click that focused a real control
+  // (history button, popover row) keeps it.
+  window.addEventListener("focus", () => {
+    const el = document.activeElement;
+    if (!el || el === document.body) input.focus();
+  });
+  input.focus();
+
   initMermaid();
   initMathJax();
   vscode.postMessage({ type: "ready" });

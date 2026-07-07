@@ -1378,3 +1378,32 @@ describe("active-editor context chip in the composer", () => {
     expect(chip.querySelector("img")).toBeNull();
   });
 });
+
+// Opening the panel must land the caret in the input — no first click needed
+// (mirrors Claude Code / Codex). Boot focuses directly (the webview is rebuilt
+// on every re-show); a window "focus" landing on <body> is forwarded to the
+// input, but never stolen from a real control.
+describe("composer input focus (caret ready on open)", () => {
+  it("focuses the input on boot, so typing works without a first click", () => {
+    const { doc } = bootWebview();
+    expect(doc.activeElement).toBe($(doc, "input"));
+  });
+
+  it("forwards window focus that landed on <body> to the input", () => {
+    const { window, doc } = bootWebview();
+    ($(doc, "input") as HTMLTextAreaElement).blur(); // focus falls back to <body>
+    expect(doc.activeElement).toBe(doc.body);
+
+    window.dispatchEvent(new (window as any).Event("focus"));
+    expect(doc.activeElement).toBe($(doc, "input"));
+  });
+
+  it("does not steal focus from a control the user actually focused", () => {
+    const { window, doc } = bootWebview();
+    const btn = $(doc, "history-btn") as HTMLButtonElement;
+    btn.focus();
+
+    window.dispatchEvent(new (window as any).Event("focus"));
+    expect(doc.activeElement).toBe(btn);
+  });
+});
