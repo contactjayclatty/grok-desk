@@ -42,6 +42,13 @@ like `/tmp/foo` — no boundary after `tmp`) checked against the CLI's advertise
   recent user message, so `after` came back ≈ the seeded size (19980 → 20209).
   A long multi-turn session compacts much better; don't read the probe's flat
   numbers as "compact does nothing".
+- The compact turn also streams **no agent content** — the turn ends with an
+  empty bubble and no on-screen sign it worked. The extension paints a
+  live-only **"Compacted."** into that bubble when the prompt resolves
+  (`messageChunk` emit in sidebar.ts, right before `agentEnd`). It rides the
+  session buffer (survives re-focus) but is deliberately absent from grok's
+  history, so a disk restore doesn't replay it — it confirms the *action*,
+  not the conversation.
 
 ## The disk rewrite is async (~15s observed)
 

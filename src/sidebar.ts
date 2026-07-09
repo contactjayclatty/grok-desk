@@ -2957,6 +2957,14 @@ See design doc for the full state machine diagram.`;
       if (gen !== session.gen) return;
       const meta = await client.prompt(promptBlocks);
       if (gen !== session.gen) return; // session was switched mid-turn
+      if (slashCommand === "compact") {
+        // A native /compact streams no agent content (research/compact.md), so
+        // the turn would end with a blank bubble and no sign it worked. Paint a
+        // live-only confirmation into that empty bubble. Deliberately not
+        // persisted: grok's own history has no such message, so re-focus (which
+        // replays the session buffer) keeps it but a disk restore won't.
+        this.emit(session, { type: "messageChunk", text: "Compacted." });
+      }
       // Skip agentEnd if a verdict was clicked mid-turn (afterTurn is queued).
       // Otherwise busy clears here, then the user could send during the brief
       // gap before afterTurn's own client.prompt starts. afterTurn emits its
