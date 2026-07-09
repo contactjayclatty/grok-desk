@@ -82,13 +82,19 @@ export function isMutatingKind(kind: string | undefined): boolean {
   return MUTATING_KINDS.has(String(kind || "").toLowerCase());
 }
 
-// Shell metacharacters that can chain, redirect, background, or smuggle code —
-// any of these means we can't trust a head-token allowlist, so we block. Note a
-// single `|` is NOT here: pipes are handled specially (see isReadOnlyCommand),
-// allowed only when every pipeline stage is itself read-only. Script-block
-// braces `{ }` are blocked because an otherwise-safe cmdlet can host arbitrary
-// code in one (e.g. `Select-Object @{e={ Remove-Item x }}`).
-const UNSAFE_SHELL = /[>&;`{}\r\n]|\$\(|\|\||<\(/;
+// Shell metacharacters that can redirect, background, or smuggle code — any of
+// these means we can't trust a head-token allowlist, so we block. The pure
+// SEQUENCING operators — `&&`, `||`, `;`, `|` — are deliberately NOT here:
+// they split the command into segments and every segment must be read-only on
+// its own (#36 — plan mode used to block the harmless `cd repo && git status`,
+// which crashed grok-4.5's planning phase). A lone `&` (POSIX backgrounding)
+// is still blocked, checked separately in isReadOnlyCommand since `&` is a
+// substring of `&&`. Script-block braces `{ }` are blocked because an
+// otherwise-safe cmdlet can host arbitrary code in one (e.g.
+// `Select-Object @{e={ Remove-Item x }}`). An operator hidden inside quotes
+// mis-splits into segments that fail the allowlist — mis-parses err toward
+// blocking.
+const UNSAFE_SHELL = /[>`{}\r\n]|\$\(|<\(/;
 
 const READONLY_HEADS = new Set([
   // POSIX
@@ -218,18 +224,21 @@ function isReadOnlyStage(stage: string): boolean {
 
 /**
  * Conservative classifier: a command is "read-only" (safe to run while
- * planning) only if it has no chaining/redirection/script-block metacharacters
- * AND every `|`-separated stage is itself a known read-only program (with a
- * read-only subcommand for git/npm/pnpm/yarn). A pipe is allowed only when both
- * sides are read-only, so `Get-ChildItem | Select-Object` passes but
- * `Get-ChildItem | Out-File x` or `cat x | iex` do not. Everything else is
- * blocked. Errs toward blocking.
+ * planning) only if it has no redirection/substitution/script-block
+ * metacharacters or backgrounding `&`, AND every segment — split on the
+ * sequencing operators `&&`, `||`, `;`, `|` — is itself a known read-only
+ * program (with a read-only subcommand for git/npm/pnpm/yarn). So
+ * `cd repo && git status` and `Get-ChildItem | Select-Object` pass, but
+ * `cd repo && npm install`, `git status; rm -rf x`, and `cat x | iex` do not.
+ * Everything else is blocked. Errs toward blocking.
  */
 export function isReadOnlyCommand(command: string): boolean {
   const cmd = String(command || "").trim();
   if (!cmd) return false;
-  if (UNSAFE_SHELL.test(cmd)) return false; // `||` and all non-pipe metachars
-  return cmd.split("|").every(isReadOnlyStage);
+  if (UNSAFE_SHELL.test(cmd)) return false;
+  if (cmd.replace(/&&/g, "").includes("&")) return false; // lone & = backgrounding
+  const segments = cmd.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean);
+  return segments.length > 0 && segments.every(isReadOnlyStage);
 }
 
 export interface PlanGateContext {

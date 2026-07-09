@@ -140,13 +140,33 @@ describe("isReadOnlyCommand", () => {
     }
   });
 
-  it("blocks read-only heads when chaining/redirection is present", () => {
+  it("blocks read-only heads when a chained segment mutates, or on redirection", () => {
     expect(isReadOnlyCommand("git diff && rm -rf x")).toBe(false);
-    expect(isReadOnlyCommand("echo ok&touch src/pwned")).toBe(false);
+    expect(isReadOnlyCommand("echo ok&touch src/pwned")).toBe(false); // lone & = backgrounding
     expect(isReadOnlyCommand("ls\nrm -rf src")).toBe(false);
     expect(isReadOnlyCommand("cat secrets > out.txt")).toBe(false);
     expect(isReadOnlyCommand("ls | xargs rm")).toBe(false);
     expect(isReadOnlyCommand("echo $(rm x)")).toBe(false);
+  });
+
+  it("allows chains where every segment is read-only (#36)", () => {
+    expect(isReadOnlyCommand("cd repo && git status")).toBe(true); // the exact #36 shape
+    expect(isReadOnlyCommand("cd src && ls -la && git diff")).toBe(true);
+    expect(isReadOnlyCommand("git status; git log --oneline")).toBe(true);
+    expect(isReadOnlyCommand("cat a.txt || echo missing")).toBe(true);
+    expect(isReadOnlyCommand("cd repo && git log --oneline | head -5")).toBe(true); // chain + pipe mix
+    expect(isReadOnlyCommand("git status;")).toBe(true); // trailing separator is harmless
+  });
+
+  it("still blocks chains where ANY segment mutates or backgrounds", () => {
+    expect(isReadOnlyCommand("cd repo && npm install")).toBe(false);
+    expect(isReadOnlyCommand("git status; rm -rf x")).toBe(false);
+    expect(isReadOnlyCommand("ls || touch x")).toBe(false);
+    expect(isReadOnlyCommand("cd repo && git commit -m x")).toBe(false);
+    expect(isReadOnlyCommand("ls && cat x &")).toBe(false); // trailing background
+    expect(isReadOnlyCommand("ls & cat x")).toBe(false); // cmd.exe-style single & stays blocked
+    expect(isReadOnlyCommand("cd repo && cat x > out.txt")).toBe(false); // redirect anywhere blocks all
+    expect(isReadOnlyCommand("gci; Remove-Item x")).toBe(false); // PowerShell ; chain
   });
 
   it("blocks read-only-looking commands that can execute arbitrary commands", () => {
