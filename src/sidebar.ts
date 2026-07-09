@@ -905,8 +905,9 @@ See design doc for the full state machine diagram.`;
     // fresh, unstarted session.
     await this.disposePool();
     this.focused = new Session();
-    const term = vscode.window.createTerminal("Grok Logout");
-    term.sendText(`"${cliPath}" logout`);
+    // shellPath/shellArgs, not sendText — a quoted path typed into PowerShell
+    // is a parser error (see runMcpList).
+    vscode.window.createTerminal({ name: "Grok Logout", shellPath: cliPath, shellArgs: ["logout"] });
     this.post({ type: "clearMessages" });
     this.post({ type: "onboarding", state: "auth-required" });
   }
@@ -1651,6 +1652,18 @@ See design doc for the full state machine diagram.`;
       }
       if (gen !== session.gen) { client.dispose(); session.client = undefined; return undefined; }
 
+      if (defaultModel && client.currentModelId && client.currentModelId !== defaultModel) {
+        const hasModel = client.availableModels.some((m) => m.modelId === defaultModel);
+        if (!hasModel) {
+          this.output.appendLine(
+            `[startup] Default model '${defaultModel}' is not available in the CLI. Using '${client.currentModelId}' instead.`,
+          );
+          vscode.window.showWarningMessage(
+            `Grok default model '${defaultModel}' is not available. Falling back to '${client.currentModelId}'. Please update your 'grok.defaultModel' setting.`,
+          );
+        }
+      }
+
       // Session is live — unlock the composer now. The "system prompt" (primer)
       // that teaches grok the plan-verdict protocol fires here EAGERLY and in the
       // BACKGROUND (not awaited), on a new OR restored session, so the composer is
@@ -1907,9 +1920,10 @@ See design doc for the full state machine diagram.`;
           this.post({ type: "onboarding", state: "missing-cli" });
           break;
         }
-        const term = vscode.window.createTerminal("Grok Login");
+        // shellPath/shellArgs, not sendText — a quoted path typed into
+        // PowerShell is a parser error (see runMcpList).
+        const term = vscode.window.createTerminal({ name: "Grok Login", shellPath: cliPath, shellArgs: ["login"] });
         term.show();
-        term.sendText(`"${cliPath}" /login`);
         break;
       }
       case "recheckConnection":
