@@ -1406,4 +1406,22 @@ describe("composer input focus (caret ready on open)", () => {
     window.dispatchEvent(new (window as any).Event("focus"));
     expect(doc.activeElement).toBe(btn);
   });
+
+  it("lands the caret in the input on the new-session click", () => {
+    const { window, doc } = bootWebview();
+    const newBtn = $(doc, "new-btn") as HTMLButtonElement;
+    newBtn.focus(); // the click leaves focus on the button
+    click(window, newBtn);
+    expect(doc.activeElement).toBe($(doc, "input"));
+  });
+
+  it("lands the caret in the input on a session swap (clearMessages)", () => {
+    // Both a history-row re-focus and a disk restore reach the webview as the
+    // host's clearMessages; the user just clicked a popover row, so the caret
+    // should end up ready in the box.
+    const { window, doc } = bootWebview();
+    ($(doc, "input") as HTMLTextAreaElement).blur();
+    dispatch(window, { type: "clearMessages" });
+    expect(doc.activeElement).toBe($(doc, "input"));
+  });
 });

@@ -1496,6 +1496,13 @@
   }
 
   function resetForNewSession() {
+    // The caret belongs in the box after any session swap — new session, a
+    // history-row re-focus, a disk restore (all funnel through here via the
+    // host's clearMessages). Guarded on document.hasFocus(): user-initiated
+    // swaps start with a click inside this webview, but a host-initiated clear
+    // (an automatic restart) can arrive while the user is typing in the editor,
+    // and focusing then would yank keyboard focus across panels.
+    if (typeof document.hasFocus !== "function" || document.hasFocus()) input.focus();
     for (const child of Array.from(messagesEl.children)) {
       if (child.id !== "welcome") child.remove();
     }
