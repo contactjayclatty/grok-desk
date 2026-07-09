@@ -1,12 +1,20 @@
 # Changelog
 
+## 1.4.31 — 2026-07-09
+
+### Added
+
+- **The install/uninstall scripts can target any code-compatible IDE.** Pass a CLI name or path — `./scripts/install.sh antigravity-ide` (Windows: `pwsh scripts\install.ps1 -Cli antigravity`) — or set `CODE_CLI=…`; with no argument they auto-detect `code` → `code-insiders` → Antigravity and hint at other IDEs they found. Thanks @mingminghome for the Antigravity groundwork. (#35) ([scripts/](scripts/))
+
+### Fixed
+
+- **Session startup no longer crashes on an invalid or unavailable `grok.defaultModel`.** A failed `setModel` on session create/load is caught and logged, falling back to the CLI's current model instead of exiting; if the configured model isn't in the CLI's list, a warning toast suggests updating the setting. Thanks @mingminghome. (#33, #34) ([src/acp.ts](src/acp.ts), [src/sidebar.ts](src/sidebar.ts))
+
 ## 1.4.30 — 2026-07-09
 
 ### Fixed
 
 - **The sign-in (and sign-out) terminal commands actually run now.** The onboarding button typed `"C:\…\grok.exe" /login` into the terminal — the wrong command (`login` is the CLI subcommand; `/login` only works inside the interactive TUI) *and* a PowerShell parser error (a quoted path followed by arguments needs the `&` call operator). Sign-in and sign-out now launch the grok binary directly as the terminal's own process, which behaves the same on PowerShell, cmd, and POSIX shells. README examples updated to `grok login` too. ([media/chat.js](media/chat.js), [src/sidebar.ts](src/sidebar.ts), [README.md](README.md))
-- **Session startup no longer crashes on invalid or missing models.** Catch and log errors if `setModel` fails on session creation or load (e.g. if a model is invalid or unsupported), falling back gracefully instead of exiting with an error. ([src/acp.ts](src/acp.ts))
-- **Added a warning for unavailable default models.** If the configured `grok.defaultModel` is not in the CLI's available models list on startup, the extension warns the user and falls back to the CLI's current model instead of failing the session. ([src/sidebar.ts](src/sidebar.ts))
 
 ### Changed
 

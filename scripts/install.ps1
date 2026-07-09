@@ -1,19 +1,30 @@
 # Install the Grok VS Code extension on Windows.
-# Usage:  pwsh scripts\install.ps1 [-VsixPath path\to.vsix]
+# Usage:  pwsh scripts\install.ps1 [-VsixPath path\to.vsix] [-Cli name-or-path]
+#   -Cli - a code-compatible CLI to install into (e.g. code-insiders, antigravity,
+#          C:\path\to\code.cmd); also settable via $env:CODE_CLI.
+#          Default: auto-detect code -> code-insiders -> antigravity-ide -> antigravity.
 # Always builds a FRESH .vsix from the current source (npm run package clears the
-# stale one first) unless an explicit -VsixPath is given — so an install never
-# silently ships a leftover build. Tries `code`, then `code-insiders`, then the
-# well-known install path, and uses --force so a same-version reinstall overwrites.
+# stale one first) unless an explicit -VsixPath is given - so an install never
+# silently ships a leftover build. Uses --force so a same-version reinstall overwrites.
 
 param(
-    [string]$VsixPath
+    [string]$VsixPath,
+    [string]$Cli
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$knownClis = @("code", "code-insiders", "antigravity-ide", "antigravity")
+if (-not $Cli -and $env:CODE_CLI) { $Cli = $env:CODE_CLI }
 
 function Find-CodeCli {
-    foreach ($name in @("code", "code-insiders")) {
+    if ($Cli) {
+        $cmd = Get-Command $Cli -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+        if (Test-Path $Cli) { return $Cli }
+        throw "Requested CLI not found: $Cli"
+    }
+    foreach ($name in $knownClis) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if ($cmd) { return $cmd.Source }
     }
@@ -21,7 +32,7 @@ function Find-CodeCli {
     if (Test-Path $fallback) { return $fallback }
     $fallback = "$env:LOCALAPPDATA\Programs\Microsoft VS Code Insiders\bin\code-insiders.cmd"
     if (Test-Path $fallback) { return $fallback }
-    throw "Could not find VS Code CLI. Install VS Code or add 'code' to PATH."
+    throw "Could not find a code-compatible CLI. Install VS Code, or pass one: pwsh scripts\install.ps1 -Cli <name-or-path>"
 }
 
 if (-not $VsixPath) {
@@ -40,4 +51,12 @@ $code = Find-CodeCli
 Write-Host "Installing $VsixPath via $code"
 & $code --install-extension $VsixPath --force
 Write-Host ""
-Write-Host "Done. Reload VS Code (Ctrl+Shift+P -> 'Developer: Reload Window') and click the Grok icon."
+Write-Host "Done. Reload the IDE window (Ctrl+Shift+P -> 'Developer: Reload Window') and click the Grok icon."
+
+if (-not $Cli) {
+    $chosen = [System.IO.Path]::GetFileNameWithoutExtension($code)
+    $others = $knownClis | Where-Object { $_ -ne $chosen -and (Get-Command $_ -ErrorAction SilentlyContinue) }
+    if ($others) {
+        Write-Host "Also detected: $($others -join ', ') - to install there instead: pwsh scripts\install.ps1 -Cli <name>"
+    }
+}

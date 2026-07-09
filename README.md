@@ -70,13 +70,15 @@ npm install
 ./scripts/install.sh        # Windows: pwsh scripts\install.ps1
 ```
 
+The install script auto-detects your IDE's CLI (`code` → `code-insiders` → Antigravity's `antigravity-ide`/`antigravity`). To target a specific code-compatible IDE, pass its CLI name or path — `./scripts/install.sh antigravity-ide` (Windows: `pwsh scripts\install.ps1 -Cli antigravity`) — or set `CODE_CLI=…`. The uninstall scripts take the same argument.
+
 Reload VS Code (**Ctrl+Shift+P → Developer: Reload Window**) and click the Grok icon in the activity bar.
 
 > **Tip:** Right-click the Grok icon → **Move To → Secondary Side Bar** to park Grok on the right, next to other AI tools.
 >
 > ![Right-click the Grok icon → Move To → Secondary Side Bar](docs/screenshots/side.png)
 
-**Uninstall:** `./scripts/uninstall.sh` (Windows: `pwsh scripts\uninstall.ps1`) or `code --uninstall-extension PawelHuryn.grok-vscode-phuryn`.
+**Uninstall:** `./scripts/uninstall.sh [cli]` (Windows: `pwsh scripts\uninstall.ps1 [-Cli name]`) or `code --uninstall-extension PawelHuryn.grok-vscode-phuryn`.
 
 ---
 
