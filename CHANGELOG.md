@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.8 — 2026-07-12
+
+### Fixed
+
+- **RTL text (Arabic, Hebrew, Farsi) now renders correctly** (user report). Every paragraph and block takes its direction from its own first strong character — right-aligned with punctuation on the correct side — across chat bubbles, thinking traces, plan cards, subagent results, tables, lists (markers and indent flip too), and the queued block; the composer follows as you type. Code blocks and inline code stay pinned LTR (the same rule the Codex extension uses), and the chat chrome doesn't move — only text direction changes, per block. ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css), [src/sidebar.ts](src/sidebar.ts))
+
 ## 1.5.7 — 2026-07-12
 
 ### Added

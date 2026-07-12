@@ -927,6 +927,20 @@
       .replace(/\x00M(\d+)\x00/g, (_, i) => mathHtml[+i]);
   }
 
+  // RTL content support, half one: dir="auto" on every block element
+  // renderMarkdown emits, so each takes its direction from its own first
+  // strong character — an Arabic list right-aligns with markers on the right
+  // while an English block in the same message stays LTR. Loose paragraph
+  // text can't be covered here (renderMarkdown emits it bare with <br>
+  // breaks, not <p>) — that half is `unicode-bidi: plaintext` on the
+  // containers in chat.css. Code deliberately never gets dir=auto: chat.css
+  // pins pre/code LTR. Runs after every innerHTML = renderMarkdown(...).
+  function applyAutoDir(root) {
+    for (const el of root.querySelectorAll("ul, ol, li, h1, h2, h3, td, th")) {
+      el.setAttribute("dir", "auto");
+    }
+  }
+
   // ---------- popovers ----------
 
   function closePopovers() {
@@ -1743,7 +1757,7 @@
 
     const body = document.createElement("div");
     body.className = "body";
-    if (text) { body.innerHTML = renderMarkdown(text); renderMermaidIn(body); }
+    if (text) { body.innerHTML = renderMarkdown(text); applyAutoDir(body); renderMermaidIn(body); }
     contentParent.appendChild(body);
 
     if (role === "user" && chips && chips.length > 0) {
@@ -2492,6 +2506,7 @@
     if (result) {
       const body = el.querySelector(".subagent-result");
       body.innerHTML = `<div class="subagent-result-label">Output of the subagent:</div>` + renderMarkdown(result);
+      applyAutoDir(body);
       const row = el.querySelector(".subagent-row");
       row.classList.add("expandable");
       row.title = "Show the subagent's result";
@@ -2667,6 +2682,7 @@
     state.agentRenderScheduled = false;
     if (!state.activeAgentEl) return;
     state.activeAgentEl.innerHTML = renderMarkdown(state.activeAgentRaw);
+    applyAutoDir(state.activeAgentEl);
     renderMermaidIn(state.activeAgentEl);
     const wrapper = state.activeAgentEl.parentElement;
     if (wrapper) wrapper._copyText = state.activeAgentRaw;
@@ -2774,6 +2790,7 @@
     const selBlocks = parseSelectionBlocks(parsed.body);
     const imageTags = parseImageTags(selBlocks.body);
     state.activeUserEl.innerHTML = renderMarkdown(imageTags.body);
+    applyAutoDir(state.activeUserEl);
     const msgEl = state.activeUserEl.closest(".msg");
     if (msgEl) msgEl._copyText = imageTags.body;
     const chipTags = [
@@ -3480,12 +3497,14 @@
     const body = document.createElement("div");
     body.className = "plan-body";
     body.innerHTML = planText ? renderMarkdown(planText) : "(empty plan)";
+    applyAutoDir(body);
     renderMermaidIn(body);
     el.appendChild(body);
 
     const feedback = document.createElement("textarea");
     feedback.className = "plan-feedback";
     feedback.rows = 2;
+    feedback.setAttribute("dir", "auto");
     feedback.placeholder = "Optional comment — Grok decides what to do with it";
     el.appendChild(feedback);
 
@@ -3550,6 +3569,7 @@
       body.className = "plan-body";
       body.hidden = true;
       body.innerHTML = text ? renderMarkdown(text) : "(empty plan)";
+      applyAutoDir(body);
       renderMermaidIn(body);
 
       el.appendChild(makePlanToggle(body));

@@ -3781,8 +3781,8 @@ See design doc for the full state machine diagram.`;
     <div class="composer-card">
       <div id="attachments" class="attachments"></div>
       <div class="composer-input-wrap">
-        <div id="input-highlight" class="input-highlight" aria-hidden="true"></div>
-        <textarea id="input" placeholder="Ask Grok..." rows="2"></textarea>
+        <div id="input-highlight" class="input-highlight" aria-hidden="true" dir="auto"></div>
+        <textarea id="input" placeholder="Ask Grok..." rows="2" dir="auto"></textarea>
         <button id="mic-btn" class="mic-btn" title="Voice control"></button>
       </div>
       <div class="composer-toolbar">

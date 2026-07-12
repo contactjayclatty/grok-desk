@@ -931,6 +931,43 @@ body.thinking-hidden .msg.thinking { display: none; }
   color: var(--vscode-errorForeground);
 }
 
+/* ---- bidi / RTL content ---- */
+
+/* RTL support, half two (half one is applyAutoDir in chat.js): each loose
+   prose line takes its direction from its own first strong character, so an
+   Arabic paragraph right-aligns with its punctuation on the correct side
+   while the chat chrome (bubble sides, toolbar, tool rows) stays LTR.
+   plaintext must sit on the CONTAINERS because renderMarkdown emits
+   paragraph text bare (with <br> breaks), never inside <p>. The default
+   text-align:start follows each line's resolved direction under plaintext. */
+.msg .body,
+.thinking-body,
+.card .plan-body,
+.subagent-result,
+.queued-text {
+  unicode-bidi: plaintext;
+}
+/* The composer is dir="auto" (typed Arabic right-aligns live). The UA gives
+   textarea[dir=auto] plaintext already; stating it on both keeps the
+   send-phrase mirror (#input-highlight) laid out byte-identically to the
+   textarea it overlays — same per-line direction resolution. */
+#input,
+.input-highlight {
+  unicode-bidi: plaintext;
+}
+/* Code is code: always LTR, isolated so surrounding RTL prose can't reorder
+   it (Codex pins its markdown code blocks dir="ltr" the same way). Also
+   keeps file-ref links readable inside RTL sentences. */
+.code-block pre,
+.msg .body code,
+.card .plan-body code,
+.thinking-body code,
+.subagent-result code {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+}
+
 /* ---- markdown in agent messages ---- */
 
 .msg.agent .body { white-space: normal; line-height: 1.55; }
@@ -950,7 +987,7 @@ body.thinking-hidden .msg.thinking { display: none; }
 .msg.agent .body ul,
 .msg.agent .body ol {
   margin: 6px 0;
-  padding-left: 22px;
+  padding-inline-start: 22px; /* logical: indents from the right for RTL lists */
 }
 .msg.agent .body ul { list-style-type: disc; }
 .msg.agent .body ol { list-style-type: decimal; }
@@ -1066,7 +1103,7 @@ body.thinking-hidden .msg.thinking { display: none; }
 .msg.agent .body td {
   border: 1px solid var(--vscode-editorWidget-border);
   padding: 5px 8px;
-  text-align: left;
+  text-align: start; /* follows the cell's dir="auto" (RTL cells right-align) */
   vertical-align: top;
   line-height: 1.45;
   /* Never break inside a word (headers looked cramped/narrow when long words
@@ -1964,7 +2001,7 @@ body.dragging { outline: 2px dashed var(--vscode-focusBorder); outline-offset: -
 .card .plan-body > :last-child { margin-bottom: 0; }
 .card .plan-body p { margin: 4px 0; }
 .card .plan-body ul,
-.card .plan-body ol { margin: 4px 0; padding-left: 20px; }
+.card .plan-body ol { margin: 4px 0; padding-inline-start: 20px; }
 .card .plan-body li { margin: 2px 0; }
 .card .plan-body h1,
 .card .plan-body h2,
