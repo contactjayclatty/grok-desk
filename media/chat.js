@@ -3658,20 +3658,36 @@
       // relPath (Windows backslashes), so split("/") alone would show the whole
       // path instead of just the name. The full path stays on the tooltip below.
       const fileName = (chip.relPath.split(/[\\/]/).pop() || chip.relPath);
-      // A file the user explicitly uploaded (explicit chip, no selection range) gets
-      // its own removable row at the top. The active-editor file (implicit) and
-      // selection snippets stay in the toolbar with the hide/eye toggle.
-      const isUpload = !chip.id.startsWith("implicit:") && !chip.selectionStart;
-      if (isUpload) {
+      // A selection range shows on the label (`name:8-15`) and tooltip — the
+      // full name is kept (CSS ellipsis handles pathological lengths, no JS cut).
+      const hasSel = chip.selectionStart && chip.selectionEnd;
+      const range = hasSel
+        ? chip.selectionStart === chip.selectionEnd
+          ? `${chip.selectionStart}`
+          : `${chip.selectionStart}-${chip.selectionEnd}`
+        : "";
+      const rangeTitle = hasSel
+        ? chip.selectionStart === chip.selectionEnd
+          ? ` (line ${chip.selectionStart})`
+          : ` (lines ${chip.selectionStart}-${chip.selectionEnd})`
+        : "";
+      const label = range ? `${fileName}:${range}` : fileName;
+      // Explicit attachments — files, images, AND selections sent via the "Add
+      // Selection to Grok" command — get their own removable row at the top,
+      // like any other attached file. Only the ambient active-editor chip
+      // (implicit — whole file, or its live selection) stays in the bottom
+      // toolbar with the hide/eye toggle.
+      const isExplicit = !chip.id.startsWith("implicit:");
+      if (isExplicit) {
         const el = document.createElement("div");
         el.className = "attachment";
         // For a disk-imported image the interesting path is the ORIGINAL file,
         // not the staged copy the chip's path points at.
-        el.title = chip.originRelPath || chip.path;
+        el.title = (chip.originRelPath || chip.path) + rangeTitle;
         el.innerHTML = chip.imageIndex != null ? ICON.image : ICON.file;
-        const label = document.createElement("span");
-        label.textContent = fileName;
-        el.appendChild(label);
+        const span = document.createElement("span");
+        span.textContent = label;
+        el.appendChild(span);
         const rm = document.createElement("button");
         rm.type = "button";
         rm.className = "attachment-remove";
@@ -3684,21 +3700,9 @@
       }
       const el = document.createElement("div");
       el.className = "chip" + (chip.hidden ? " chip-hidden" : "");
-      // Mirror the live editor selection on the label (`name:8-15`) — the full
-      // name is kept (CSS ellipsis handles pathological lengths, no JS cut).
-      const hasSel = chip.selectionStart && chip.selectionEnd;
-      const range = hasSel
-        ? chip.selectionStart === chip.selectionEnd
-          ? `${chip.selectionStart}`
-          : `${chip.selectionStart}-${chip.selectionEnd}`
-        : "";
-      el.title = chip.path + (hasSel
-        ? (chip.selectionStart === chip.selectionEnd
-          ? ` (line ${chip.selectionStart})`
-          : ` (lines ${chip.selectionStart}-${chip.selectionEnd})`)
-        : "");
+      el.title = chip.path + rangeTitle;
       el.innerHTML = (chip.hidden ? ICON.eyeOff : ICON.file) +
-        `<span>${escapeHtml(range ? `${fileName}:${range}` : fileName)}</span>`;
+        `<span>${escapeHtml(label)}</span>`;
       el.onclick = () => vscode.postMessage({ type: "toggleChip", id: chip.id });
       chipsEl.appendChild(el);
     }
@@ -4112,6 +4116,12 @@
         // The CSS derives both `zoom` and the viewport-height compensation from
         // this one variable, so the composer stays pinned to the bottom.
         document.body.style.setProperty("--chat-zoom", String(msg.value || 1));
+        break;
+      case "focusInput":
+        // Send Selection / Send File / @-mention (#43): the host revealed the
+        // panel taking focus; land the caret in the composer so the user can
+        // type a prompt immediately.
+        input.focus();
         break;
       case "grokUpdateStatus":
         // Reply to the About panel's checkGrokUpdate. The check also reports the

@@ -260,8 +260,8 @@ VS Code commands (not Grok slash commands):
 | `Grok: Compact Conversation` | Compact the current session to reclaim context |
 | `Grok: Pick Model` | Open the model picker |
 | `Grok: Toggle Plan / Agent Mode` | Open the mode picker (Agent / Plan / Auto accept) |
-| `Grok: Send File` | Add the selected file to context |
-| `Grok: Send Selection` | Send the current text selection to Grok |
+| `Grok: Send File` | Add a file to the composer (right-clicked file, active editor, or a file picker) |
+| `Add Selection to Grok` | Attach the selected lines as a snippet chip in the composer |
 | `Grok: Insert @-Mention` | Insert an `@`-mention for the active file into the composer |
 | `Grok: Expand All Tool Details (This Session)` | Open every tool group and command IN/OUT box, and keep new ones open — this session only |
 | `Grok: Collapse All Tool Details (This Session)` | Collapse them all, and keep new ones collapsed — this session only |

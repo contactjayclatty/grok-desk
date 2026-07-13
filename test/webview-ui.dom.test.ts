@@ -1407,6 +1407,50 @@ describe("active-editor context chip in the composer", () => {
   });
 });
 
+// A selection sent via the "Add Selection to Grok" command is an EXPLICIT
+// attachment (id "explicit:…"), so it belongs in the top attachments row like
+// any other attached file — removable, with its line range on the label. Only
+// the ambient active-editor chip (implicit) stays in the bottom toolbar.
+describe("explicit selection chip placement (top attachments row)", () => {
+  const explicitSel = {
+    id: "explicit:/repo/src/a.ts:8-12:1",
+    path: "/repo/src/a.ts",
+    relPath: "src/a.ts",
+    selectionStart: 8,
+    selectionEnd: 12,
+    hidden: false,
+  };
+
+  it("renders a command-sent selection in the top row with its range + a remove button", () => {
+    const { window, posted, doc } = bootWebview();
+    dispatch(window, { type: "chips", chips: [explicitSel] });
+
+    // Top attachments area, NOT the bottom toolbar.
+    expect(doc.querySelector("#chips .chip")).toBeNull();
+    const row = doc.querySelector("#attachments .attachment") as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.querySelector("span")!.textContent).toBe("a.ts:8-12"); // range survives the move to the top
+    expect(row.title).toBe("/repo/src/a.ts (lines 8-12)");
+
+    // Removable like any other attachment (not a hide toggle).
+    const rm = row.querySelector(".attachment-remove") as HTMLElement;
+    expect(rm).not.toBeNull();
+    click(window, rm);
+    expect(posted.find((m) => m.type === "removeChip" && m.id === explicitSel.id)).toBeTruthy();
+  });
+
+  it("keeps the ambient active-editor selection in the bottom toolbar", () => {
+    const { window, doc } = bootWebview();
+    dispatch(window, {
+      type: "chips",
+      chips: [{ ...explicitSel, id: "implicit:/repo/src/a.ts" }],
+    });
+    expect(doc.querySelector("#attachments .attachment")).toBeNull();
+    const chip = doc.querySelector("#chips .chip") as HTMLElement;
+    expect(chip.querySelector("span")!.textContent).toBe("a.ts:8-12");
+  });
+});
+
 // Opening the panel must land the caret in the input — no first click needed
 // (mirrors Claude Code / Codex). Boot focuses directly (the webview is rebuilt
 // on every re-show); a window "focus" landing on <body> is forwarded to the

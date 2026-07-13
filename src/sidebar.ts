@@ -288,10 +288,24 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     });
   }
 
-  insertActiveMention(opts?: { selection?: boolean; uri?: vscode.Uri }): void {
+  insertActiveMention(opts?: { selection?: boolean; uri?: vscode.Uri; pickIfMissing?: boolean }): void {
     const editor = vscode.window.activeTextEditor;
     const uri = opts?.uri ?? editor?.document.uri;
-    if (!uri) return;
+    if (!uri) {
+      // Invoked from the Command Palette with no file editor active — no target
+      // to attach. Degrade gracefully instead of a silent no-op that also drops
+      // focus (#43): Send File opens the file picker; the selection/@-mention
+      // commands (which have nothing to reference without an editor) surface a
+      // hint so the command visibly did *something*.
+      if (opts?.pickIfMissing) {
+        void this.trackAttach(this.pickFileFromComputer());
+      } else {
+        void vscode.window.showInformationMessage(
+          "Grok: open a file in the editor first, then run this command.",
+        );
+      }
+      return;
+    }
     const relPath = vscode.workspace.asRelativePath(uri);
     let selStart: number | undefined;
     let selEnd: number | undefined;
@@ -301,7 +315,7 @@ export class GrokSidebar implements vscode.WebviewViewProvider {
     }
     this.chips.push(makeExplicitChip(uri.fsPath, relPath, selStart, selEnd));
     this.postChips();
-    this.reveal();
+    this.revealAndFocusComposer();
   }
 
   newSession(): void {
@@ -2451,7 +2465,7 @@ See design doc for the full state machine diagram.`;
         void vscode.window.showErrorMessage(`Grok: could not attach ${path.basename(uri.fsPath)} — ${(e as Error).message}`);
       }
     }
-    this.reveal();
+    this.revealAndFocusComposer();
   }
 
   /** Resolve the xAI key for Speech-to-Text: the `grok.voiceApiKey` setting,
@@ -2986,7 +3000,7 @@ See design doc for the full state machine diagram.`;
         return;
       }
       await this.stageImageAttachment(bytes, mimeType);
-      this.reveal();
+      this.revealAndFocusComposer();
     } catch (e) {
       this.output.appendLine(`[image] paste failed: ${(e as Error).message}`);
       void vscode.window.showErrorMessage(`Grok: could not attach the pasted image — ${(e as Error).message}`);
@@ -3640,8 +3654,16 @@ See design doc for the full state machine diagram.`;
     this.markRead(this.focused); // opening a cold session clears its unread badge
   }
 
-  private reveal(): void {
-    this.view?.show?.(true);
+  /** Reveal the panel AND move keyboard focus into the composer, so every flow
+   *  that adds an attachment (Send Selection / Send File / @-mention, the "+"
+   *  file picker, image paste) leaves the user ready to type a prompt (#43).
+   *  show(false) takes focus to the view; the focusInput message then lands the
+   *  caret in the textarea itself. This matters even for the picker/paste flows:
+   *  the native file dialog returns focus to the editor on close, and a plain
+   *  Send Selection would otherwise leave focus in the editor. */
+  private revealAndFocusComposer(): void {
+    this.view?.show?.(false);
+    this.post({ type: "focusInput" });
   }
 
   private watchActiveEditor(): void {

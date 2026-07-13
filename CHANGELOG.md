@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.11 — 2026-07-13
+
+### Added
+
+- **Caret lands in the composer after you add context (#43).** Send Selection, Send File, @-mention, the **+** file picker, and image paste all reveal the panel *taking* focus, so you can type your prompt immediately — no click into the input first. ([src/sidebar.ts](src/sidebar.ts), [src/protocol.ts](src/protocol.ts), [media/chat.js](media/chat.js))
+
+### Changed
+
+- **"Grok: Send Selection" is now "Add Selection to Grok",** and a command-sent selection attaches in the **top** attachments row (removable, with its line range) like any other file — only the ambient active-editor chip stays in the bottom toolbar. ([package.json](package.json), [media/chat.js](media/chat.js))
+- **"Grok: Send File" no longer silently no-ops** from the Command Palette when no file is open — it opens a file picker instead of doing nothing and dropping focus. ([src/sidebar.ts](src/sidebar.ts), [src/extension.ts](src/extension.ts))
+- The internal debug command (`grok._debugDummyPlan`) is hidden from the Command Palette. ([package.json](package.json))
+
 ## 1.5.10 — 2026-07-12
 
 ### Added

@@ -28,7 +28,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand(
       "grok.sendFile",
-      (uri?: vscode.Uri) => sidebar.insertActiveMention({ uri }),
+      (uri?: vscode.Uri) => sidebar.insertActiveMention({ uri, pickIfMissing: true }),
     ),
     vscode.commands.registerCommand("grok.insertAtMention", () =>
       sidebar.insertActiveMention(),
