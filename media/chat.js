@@ -2095,11 +2095,13 @@
       el.classList.remove("in-progress");
       const hdr = el.querySelector(".tool-group-header");
       const label = hdr.querySelector(".tool-group-label");
-      label.textContent = summarizeTools(calls);
-      appendGroupDiffTotals(el, label); // "Edited N files" gains a "· +A −R" roll-up
+      label.textContent = summarizeTools(calls); // wipes the totals slot…
+      paintGroupDiffTotals(el); // …so "Edited N files" re-gains its "· +A −R" roll-up
       // Settle the finished group to its effective expand state: the latch if
       // set, else auto-open when it has a command/diff detail (Expand tool details).
-      setGroupExpanded(el, groupShouldExpand(el));
+      // Skipped once the user has toggled this group themselves — expanding a
+      // running batch to watch it must not be undone the moment it finishes.
+      if (!el._userToggled) setGroupExpanded(el, groupShouldExpand(el));
     }
     state.activeToolGroupEl = null;
   }
@@ -2164,6 +2166,10 @@
       `<span class="tool-group-label">${escapeHtml(inProgressLabel(call))}</span>` +
       `<span class="tool-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>` +
       `<span class="tool-chevron" aria-hidden="true">${ICON.chevronRight}</span>`;
+    // The rebuild above wipes the header's totals slot — re-paint it, or an edit
+    // whose diff already landed would lose its "· +A −R" the moment the NEXT tool in
+    // the batch starts (and only get it back at batch close).
+    paintGroupDiffTotals(el);
     // A lone in-progress COMMAND is expandable immediately — its chevron shows
     // now (multi-tool groups keep theirs until the batch closes), and
     // expanding also opens the row's IN/OUT detail so one click reveals the
@@ -2174,6 +2180,11 @@
     );
     hdr.onclick = () => {
       const expanded = !body.hidden;
+      // The user has stated an intent for THIS group: don't let closeToolGroup's
+      // automatic settle undo it when the batch finishes. An explicit global
+      // action (the gear setting or the Expand/Collapse All latch) still wins —
+      // that runs through applyExpandCommandOutputs, which force-applies.
+      el._userToggled = true;
       body.hidden = expanded;
       el.classList.toggle("expanded", !expanded);
       if (!expanded && el.classList.contains("cmd-single")) {
@@ -2382,44 +2393,98 @@
   // for colorblind users. Long regions cap the rendered rows (the full change is
   // one "open diff →" click away in the native editor).
   const MAX_INLINE_DIFF_LINES = 400;
-  function buildInlineDiffRegion(diff, result) {
-    // Codex-style: a line-number gutter + a colored left-border stripe + a subtle
-    // per-line background (green add / red del). A small +/- glyph sits right by the
-    // border for color-blind readability. Numbers are region-relative (grok sends
-    // only the replaced region, not the file offset): a del shows the OLD-side
-    // number, an add/context the NEW-side number -- unified-diff local numbering.
+  // A wire line number is only usable if it's a real 1-based file line; anything
+  // else (absent, 0, negative, non-integer) falls back to the old region-relative 1.
+  function fileLineOr1(v) {
+    return typeof v === "number" && Number.isFinite(v) && v >= 1 ? Math.floor(v) : 1;
+  }
+  // A quiet hairline marking a jump in file lines between two hunks of the SAME
+  // edit — a replace_all's sites sit at scattered lines (3, 5, 7…), so without it
+  // two hunks read as one continuous run. The line numbers say where we jumped to;
+  // this only has to stop the eye from joining them.
+  function makeHunkSeparator() {
+    const sep = document.createElement("div");
+    sep.className = "tdl-sep";
+    sep.setAttribute("aria-hidden", "true");
+    return sep;
+  }
+
+  // Render ONE diff block as a single scrollable region containing one hunk per
+  // replaced SITE (`hunks` = [{site, result}] — see extractDiffSites). One region
+  // per BLOCK, never per site: `.tool-diff-region` scrolls at 320px, so a
+  // 148-occurrence replace would otherwise stack 148 nested scroll boxes.
+  //
+  // Codex-style rows: a line-number gutter + a colored left-border stripe + a subtle
+  // per-line background (green add / red del). A small +/- glyph sits right by the
+  // border for color-blind readability. A del shows the OLD-side number, an
+  // add/context the NEW-side number -- unified-diff local numbering.
+  //
+  // The numbers are REAL file lines: each site carries its position (1-based), so
+  // the counters seed from it. Falls back to 1 when absent (older builds, the
+  // whole-file-Write echo, hand-built fixtures) -- the region-relative numbering we
+  // used to always emit.
+  function buildInlineDiffRegion(hunks) {
     const wrap = document.createElement("div");
     wrap.className = "tool-diff-region";
-    const rows = result.lines;
-    const shown = Math.min(rows.length, MAX_INLINE_DIFF_LINES);
-    let oldNo = 1;
-    let newNo = 1;
-    for (let i = 0; i < shown; i++) {
-      const ln = rows[i];
-      const isAdd = ln.type === "add";
-      const isDel = ln.type === "del";
-      const row = document.createElement("div");
-      row.className = "tdl" + (isAdd ? " tdl-add" : isDel ? " tdl-del" : "");
-      const sign = document.createElement("span");
-      sign.className = "tdl-sign";
-      sign.textContent = isAdd ? "+" : isDel ? "-" : "";
-      const num = document.createElement("span");
-      num.className = "tdl-num";
-      if (isAdd) num.textContent = String(newNo++);
-      else if (isDel) num.textContent = String(oldNo++);
-      else { num.textContent = String(newNo++); oldNo++; }
-      const code = document.createElement("span");
-      code.className = "tdl-code";
-      code.textContent = ln.text === "" ? " " : ln.text;
-      row.appendChild(sign);
-      row.appendChild(num);
-      row.appendChild(code);
-      wrap.appendChild(row);
+    let widest = 0;
+    let rendered = 0;
+    let total = 0;
+    let truncated = false;
+    for (const h of hunks) {
+      total += h.result.lines.length;
+      if (h.result.truncated) truncated = true;
     }
-    if (rows.length > shown || result.truncated) {
+    // MAX_INLINE_DIFF_LINES is a budget ACROSS the block's hunks, not per hunk —
+    // 1000 sites must not paint 2000 rows. The +N −M stat is summed over EVERY
+    // site regardless (attachDiffPreviewToToolItem), so capping the render never
+    // understates the change.
+    let prevNewEnd = null;
+    for (const { site, result } of hunks) {
+      if (rendered >= MAX_INLINE_DIFF_LINES) break;
+      const rows = result.lines;
+      let oldNo = fileLineOr1(site && site.oldLine);
+      let newNo = fileLineOr1(site && site.newLine);
+      // Only between hunks, and only when the new side actually skipped lines.
+      if (prevNewEnd !== null && newNo !== prevNewEnd) wrap.appendChild(makeHunkSeparator());
+      const shown = Math.min(rows.length, MAX_INLINE_DIFF_LINES - rendered);
+      for (let i = 0; i < shown; i++) {
+        const ln = rows[i];
+        const isAdd = ln.type === "add";
+        const isDel = ln.type === "del";
+        const row = document.createElement("div");
+        row.className = "tdl" + (isAdd ? " tdl-add" : isDel ? " tdl-del" : "");
+        const sign = document.createElement("span");
+        sign.className = "tdl-sign";
+        sign.textContent = isAdd ? "+" : isDel ? "-" : "";
+        const num = document.createElement("span");
+        num.className = "tdl-num";
+        let shownNo;
+        if (isAdd) shownNo = newNo++;
+        else if (isDel) shownNo = oldNo++;
+        else { shownNo = newNo++; oldNo++; }
+        num.textContent = String(shownNo);
+        if (shownNo > widest) widest = shownNo;
+        const code = document.createElement("span");
+        code.className = "tdl-code";
+        code.textContent = ln.text === "" ? " " : ln.text;
+        row.appendChild(sign);
+        row.appendChild(num);
+        row.appendChild(code);
+        wrap.appendChild(row);
+      }
+      rendered += shown;
+      prevNewEnd = newNo;
+    }
+    // Size the gutter to the widest number actually rendered, +1ch of slack so a
+    // number never butts against the code column. Floored at 4ch, which is exactly
+    // today's look for everything up to 999; only a 1000+ line file grows it. A
+    // fixed track would instead overflow — 5 digits would collide with the +/- glyph.
+    wrap.style.setProperty("--tdl-num-w", Math.max(4, String(widest).length + 1) + "ch");
+    const remaining = total - rendered;
+    if (remaining > 0 || truncated) {
       const more = document.createElement("div");
       more.className = "tool-diff-more";
-      more.textContent = "... " + (rows.length - shown) + " more line(s) - open diff for the full change";
+      more.textContent = "... " + remaining + " more line(s) - open diff for the full change";
       wrap.appendChild(more);
     }
     return wrap;
@@ -2434,34 +2499,69 @@
   // can carry more than one region.
   function attachDiffPreviewToToolItem(toolCallId, diffs) {
     const item = state.toolItemsByToolCallId.get(toolCallId);
-    if (!item || item.querySelector(".tool-item-details")) return; // idempotent (buffer replay)
+    if (!item) return;
+    // grok reports an edit's diff TWICE (research/edit-diff.md § Two updates per
+    // edit): first an optimistic pre-write echo, then the authoritative completed
+    // update. For a search_replace the two are byte-identical, but a whole-file
+    // Write's echo carries oldText:"" — it hasn't read the old content yet — while
+    // the completed one carries the real prior content. So a repaint with a
+    // DIFFERENT diff must WIN (an overwrite otherwise renders as pure adds forever,
+    // since the echo lands first); a byte-identical repaint is a no-op, which is
+    // what keeps buffer replay idempotent.
+    const sig = JSON.stringify(diffs);
+    if (item._diffSig === sig) return;
+    const existing = item.querySelector(".tool-item-details");
+    if (existing && !existing.classList.contains("tool-item-diff")) return; // a command's IN/OUT owns this row
+    item._diffSig = sig;
 
+    // Count over EVERY site of every block — that's the whole point of expanding
+    // details[]: a 148-occurrence replace_all is +148 −148, not the "+1 −1" the
+    // token-sized block-level oldText/newText would report. The render is capped
+    // (buildInlineDiffRegion), the counts never are.
     let added = 0;
     let removed = 0;
-    const regions = [];
+    const blocks = [];
     for (const diff of diffs) {
-      const result = computeLineDiff(diff.oldText, diff.newText);
-      added += result.added;
-      removed += result.removed;
-      regions.push({ diff, result });
+      const hunks = [];
+      for (const site of diff.sites) {
+        const result = computeLineDiff(site.oldText, site.newText);
+        added += result.added;
+        removed += result.removed;
+        hunks.push({ site, result });
+      }
+      blocks.push({ diff, hunks });
     }
     item._diffStat = { added, removed, path: diffs[0] && diffs[0].path };
 
     // Always-visible +A −R on the row (and the roll-up onto the group header).
-    item.appendChild(makeDiffStat(added, removed));
-    bumpGroupDiffTotals(item, added, removed, item._diffStat.path);
+    const stat = makeDiffStat(added, removed);
+    const prevStat = item.querySelector(".diff-stat");
+    if (prevStat) prevStat.replaceWith(stat);
+    else item.appendChild(stat);
+    recomputeGroupDiffTotals(item);
 
-    const chevron = document.createElement("span");
-    chevron.className = "tool-chevron";
-    chevron.setAttribute("aria-hidden", "true");
-    chevron.innerHTML = ICON.chevronRight;
-    item.appendChild(chevron);
+    // On a repaint, REUSE the existing detail node: swapping in a new one would
+    // leave wireCommandToggle's click listener bound to the detached node (and
+    // double-bind a second), and reusing it preserves whatever expand state the row
+    // is already in.
+    let details = existing;
+    const fresh = !details;
+    if (fresh) {
+      const chevron = document.createElement("span");
+      chevron.className = "tool-chevron";
+      chevron.setAttribute("aria-hidden", "true");
+      chevron.innerHTML = ICON.chevronRight;
+      item.appendChild(chevron);
 
-    const details = document.createElement("div");
-    details.className = "tool-item-details tool-item-diff";
-    details.hidden = !detailShouldExpand();
-    for (const { diff, result } of regions) {
-      details.appendChild(buildInlineDiffRegion(diff, result));
+      details = document.createElement("div");
+      details.className = "tool-item-details tool-item-diff";
+      details.hidden = !detailShouldExpand();
+    }
+    while (details.firstChild) details.removeChild(details.firstChild);
+    // One region + ONE "open diff →" per BLOCK (not per site) — the link's payload
+    // stays the block's own oldText/newText, which is what the native diff editor wants.
+    for (const { diff, hunks } of blocks) {
+      details.appendChild(buildInlineDiffRegion(hunks));
       const preview = document.createElement("button");
       preview.className = "preview-link";
       preview.textContent = "open diff →";
@@ -2471,8 +2571,10 @@
       };
       details.appendChild(preview);
     }
-    item.appendChild(details);
-    wireCommandToggle(item, details, "Show the diff");
+    if (fresh) {
+      item.appendChild(details);
+      wireCommandToggle(item, details, "Show the diff");
+    }
     scrollToBottom();
   }
 
@@ -2493,34 +2595,108 @@
     return sub;
   }
 
-  // Roll an edit's counts up onto its enclosing group so the COLLAPSED header can
-  // show totals ("Edited 1 file · +7 −2"). Files are de-duped by path — grok
-  // emits one edit call per change, so two edits to one file must still read
+  // Roll the group's edit counts up onto its header so it can show totals
+  // ("Edited 1 file · +7 −2"), and re-paint them immediately — the counts track each
+  // edit AS IT LANDS, not only once the batch closes. Files are de-duped by path —
+  // grok emits one edit call per change, so two edits to one file must still read
   // "Edited 1 file" (matching summarizeTools' path-dedup), not 2.
-  function bumpGroupDiffTotals(item, added, removed, path) {
+  //
+  // Recomputed from the rows' current `_diffStat` rather than accumulated
+  // incrementally, so a row REPAINTED with the authoritative diff (see
+  // attachDiffPreviewToToolItem) replaces its earlier counts instead of
+  // double-counting them into the group.
+  function recomputeGroupDiffTotals(item) {
     const group = item.closest && item.closest(".tool-group");
     if (!group) return;
-    const t = group._diffTotals || (group._diffTotals = { added: 0, removed: 0, files: new Set() });
-    t.added += added;
-    t.removed += removed;
-    t.files.add(path || ("__anon" + t.files.size));
+    const t = { added: 0, removed: 0, files: new Set() };
+    let anon = 0;
+    for (const row of group.querySelectorAll(".tool-item")) {
+      const s = row._diffStat;
+      if (!s) continue;
+      t.added += s.added;
+      t.removed += s.removed;
+      t.files.add(s.path || "__anon" + anon++);
+    }
+    group._diffTotals = t;
+    paintGroupDiffTotals(group);
+  }
+
+  // Paint the group's rolled-up edit totals onto its header label, so "Editing
+  // x.ts"/"Edited N files" is auditable at a glance without expanding. Runs in BOTH
+  // states — while the batch is still in progress (each edit's counts show the
+  // moment its diff lands) and after closeToolGroup rewrites the label.
+  //
+  // The totals live in their own span so a re-paint REPLACES them instead of
+  // appending a second copy. Two things wipe the slot, and both re-paint right
+  // after: addToToolGroup rebuilds the header's innerHTML on every new call in the
+  // batch, and closeToolGroup resets the label's textContent. No-op for a group with
+  // no edits.
+  function paintGroupDiffTotals(group) {
+    if (!group) return;
+    const labelEl = group.querySelector(".tool-group-label");
+    if (!labelEl) return;
+    const prev = labelEl.querySelector(".tool-group-diff-totals");
+    if (prev) prev.remove();
+    const t = group._diffTotals;
+    if (!t || (t.added === 0 && t.removed === 0)) return;
+    const slot = document.createElement("span");
+    slot.className = "tool-group-diff-totals";
+    slot.appendChild(document.createTextNode(" · "));
+    slot.appendChild(makeDiffStat(t.added, t.removed));
+    labelEl.appendChild(slot);
   }
 
   // Extract every `type:"diff"` block from a tool call's `content` and render the
-  // inline edit diff. grok delivers the diff differently by path: LIVE it rides a
-  // `tool_call_update` (the `tool_call` is a bare "StrReplace" with no content),
-  // but on session/load REPLAY the whole edit collapses into a single completed
-  // `tool_call` that carries the diff itself — no separate update. So this must
-  // run for BOTH message kinds, else a restored edit shows an expandable group
+  // inline edit diff. grok delivers the diff differently by path: LIVE it rides the
+  // `tool_call_update`s (the `tool_call` carries the edit's rawInput args but no
+  // `content`), but on session/load REPLAY the whole edit collapses into a single
+  // completed `tool_call` that carries the diff itself — no separate update. So this
+  // must run for BOTH message kinds, else a restored edit shows an expandable group
   // with no diff inside it (#30).
-  // Append the group's rolled-up edit totals to its (already-summarized) header
-  // label, so a COLLAPSED "Edited N files" is auditable at a glance. No-op for a
-  // group with no edits.
-  function appendGroupDiffTotals(group, labelEl) {
-    const t = group._diffTotals;
-    if (!t || (t.added === 0 && t.removed === 0)) return;
-    labelEl.appendChild(document.createTextNode(" · "));
-    labelEl.appendChild(makeDiffStat(t.added, t.removed));
+  // Expand a diff block into one hunk per replaced SITE.
+  //
+  // The block's own oldText/newText is the search *pattern*, so for a replace_all it
+  // is token-sized by design — rendering it alone shows a 148-occurrence rename as a
+  // single meaningless "+1 −1" hunk. `_meta.details[]` is the only complete account:
+  // one entry per site, each with its real 1-based file lines. The THREE delivery
+  // shapes carry it differently:
+  //   echo (pre-write)  → no details[]; block _meta {old_line,new_line} is the FIRST
+  //                       site only → one approximate hunk, upgraded by the completed
+  //                       update (a different _diffSig, so the repaint wins)
+  //   completed         → details[], one entry per site (block _meta has no lines)
+  //   session/load      → same as completed
+  //   whole-file Write  → echo _meta is {} (seed 1); completed details[] length 1
+  //
+  // `line_prefix` is the text BEFORE the match on that line, so prepending it turns a
+  // bare "PLACEHOLDER" into "item 1: the token is PLACEHOLDER". There is NO
+  // line_suffix on the wire — the tail of the line is genuinely unavailable, and
+  // reconstructing it from a neighbour's context_before is fragile (and impossible for
+  // the last site), so the hunk is prefix-only. Still strictly better than the token.
+  //
+  // Note `old_line` is a POST-edit coordinate; it equals `new_line` in every capture
+  // so far, so it's only a true old-side line for line-count-neutral edits (the common
+  // token-rename case). See research/edit-diff.md § Line numbers + replace-all.
+  function extractDiffSites(meta, oldText, newText) {
+    const details = meta && Array.isArray(meta.details) ? meta.details : null;
+    if (details && details.length) {
+      const sites = [];
+      for (const d of details) {
+        // An entry that names no strings doesn't describe a site — it can't be
+        // expanded, only positioned (handled below).
+        if (!d || (typeof d.old_string !== "string" && typeof d.new_string !== "string")) continue;
+        const old = typeof d.old_string === "string" ? d.old_string : "";
+        const nw = typeof d.new_string === "string" ? d.new_string : "";
+        // A creation (no prior content — a new file's details[0] is old_string:"")
+        // has no line to prefix; keep "" so it reads as a pure add instead of
+        // inventing a deleted line out of the prefix.
+        const pre = old === "" || typeof d.line_prefix !== "string" ? "" : d.line_prefix;
+        sites.push({ oldText: old === "" ? "" : pre + old, newText: pre + nw, oldLine: d.old_line, newLine: d.new_line });
+      }
+      if (sites.length) return sites;
+      const first = details[0] || {};
+      return [{ oldText, newText, oldLine: first.old_line, newLine: first.new_line }];
+    }
+    return [{ oldText, newText, oldLine: meta && meta.old_line, newLine: meta && meta.new_line }];
   }
 
   function applyToolDiffs(call) {
@@ -2529,7 +2705,14 @@
     const diffs = [];
     for (const item of c) {
       if (item?.type === "diff") {
-        diffs.push({ path: item.path, oldText: item.oldText ?? "", newText: item.newText ?? "" });
+        const oldText = item.oldText ?? "";
+        const newText = item.newText ?? "";
+        diffs.push({
+          path: item.path,
+          oldText, // block-level: the "open diff →" payload + the permission card's line count
+          newText,
+          sites: extractDiffSites(item._meta, oldText, newText),
+        });
       }
     }
     if (!diffs.length) return;

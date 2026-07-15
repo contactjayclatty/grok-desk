@@ -14,6 +14,16 @@ accounts/builds, so its observations below remain valid; where the two differ (c
 `set_model` echo) both are called out. See **§5** for the Grok 4.5 verification run (full live
 suite + probes; Composer 2.5 re-verified alongside).
 
+**Revision history** — newest first. Each observation is dated and carries the grok CLI build it
+was made against; a section without a date here predates this log and is covered by **Basis**.
+
+| Date | grok CLI | What changed |
+|---|---|---|
+| **2026-07-15** | **0.2.101** | **§2.1 — the headline defect is FIXED.** A rejection of `x.ai/exit_plan_mode` is now honored. **One new, still-open hole:** plan mode gates the *edit* tool but **not** `terminal/create`, so a shell command can mutate the workspace during planning. |
+| **2026-07-15** | **0.2.101** | **§2.10 (new) — edit diffs.** Three asks: every edit reports its diff **twice** and the first can be wrong (an overwriting Write's echo claims `oldText:""`); the echo, the completed update, and the session/load replay each carry a **different `_meta` shape**; and `details[]` has `line_prefix` but no `line_suffix`, so the changed line can't be reconstructed. *(Raised and **withdrawn** the same day: "a replace-all under-describes the change" — `_meta.details[]` does enumerate every site, 12/12 with exact line numbers. That was our client gap, not a CLI defect.)* |
+| **2026-07-13** | *not recorded* | **§2.9 (new) — terminal commands** (issue #46, extension v1.5.13). The agent emits POSIX-subshell idioms against a PowerShell host, and the two agent families use different command-execution models. |
+| **2026-07-11** | **0.2.93** | **§5 — Grok 4.5 verification.** Every grok-build-family finding re-verified against Grok 4.5; Composer 2.5 re-verified alongside. |
+
 ---
 
 ## 1. The two agent families behave differently on the wire
@@ -43,24 +53,53 @@ differences per agent type.
 
 Ordered roughly by how much client code each one cost.
 
-### 2.1 Plan mode: `x.ai/exit_plan_mode` cannot be rejected
-Any client response — JSON-RPC **result or error** — is treated as approval (re-verified
-on 0.2.3; the workaround remains required and covered by the 0.2.93 live gate;
-`research/understanding-plan-mode.md`). There is no wire-level "keep planning."
-Consequences pile up:
-- The request arrives with `planContent: null`, so the plan text isn't even in the request —
-  we snoop grok's own `plan.md` file write to recover it.
-- After we respond, the unblocked planning turn streams contentless filler ("I'll wait for
-  your verdict…") that grok does **not** persist to history but **does** stream live.
-- `current_mode_update: "default"` fires even when the user chose to keep planning.
+### 2.1 Plan mode: rejection now works — but `terminal/create` escapes the plan gate
+**Update 2026-07-15 (grok 0.2.101): the defect this section originally reported is FIXED — thank
+you.** Through **0.2.3**, any client response to `x.ai/exit_plan_mode` — JSON-RPC **result or
+error** — was treated as approval, so there was no wire-level "keep planning." On **0.2.101** the
+two are cleanly distinguished. A/B with an identical prompt and build, varying only the response
+type (`research/plan-mode-recheck-probe.cjs`):
 
-Our workaround is a whole subsystem: a client-side write/terminal gate (`src/plan-gate.ts`)
-enforced at the mandatory `fs/write_text_file` / `terminal/create` choke points, plus a hidden
-**primer** message teaching the model to ignore the bogus tool result and read
-`[Plan approved]`/`[Plan rejected]`/`[Plan cancelled]` from the next user message. The primer
-itself then causes secondary problems (see 2.6).
-**Ask:** honor a rejection (error or an explicit outcome) — this single fix collapses the
-primer, the gate, the filler suppression, and half of section 2.6.
+| | **error** (reject) | **result** (approve) |
+|---|---|---|
+| `current_mode_update` | `[plan]` — stays in plan | `[plan, default]` — exits plan |
+| plan turn `stopReason` | `cancelled` | `end_turn` |
+| workspace writes | **0** — seed files byte-identical | 2 (file mutated + file created) |
+| the model's own account | *"the user never approved or rejected"* | *"the user **approved** the plan"* |
+
+`current_mode_update: "default"` no longer fires on the reject path, and `planContent` now
+usually arrives **populated** with the plan text. Two residual notes:
+- A rejection is interpreted as a **tool failure** (*"exit_plan_mode failed twice with a client
+  disconnect"*), not a semantic *user rejected*. The outcome is right, but an explicit rejection
+  outcome would beat overloading the error channel.
+- `planContent: null` **still occurs** — observed when the model called `exit_plan_mode` without
+  having drafted a plan — so clients still need the `plan.md` fallback.
+
+**Still open, and the reason the workaround stays: plan mode is enforced for the edit tool but
+not for the terminal tool** (grok 0.2.101, 2026-07-15). In plan mode the CLI's own tool layer
+correctly refuses an edit:
+> `Rejected: file edits are not allowed in plan mode -- the only editable file is the plan file`
+> `(...plan.md). User verbal approval to edit is not sufficient, they must exit plan mode via the UI.`
+
+Good — that's CLI-enforced, not model-cooperative. But asked to route around that block, the model
+issued a `terminal/create` which the CLI **passed straight through to the client**:
+```
+node -e "require('fs').appendFileSync('app.js','\nfunction subtract(a,b){return a-b}\n')"
+```
+Nothing was written only because our probe ACKs terminals without executing them — a client that
+actually runs the agent's commands (the whole point of `terminal/*` delegation) would have mutated
+the workspace during "planning", contradicting the CLI's own rule above. Our client-side
+`terminal/create` allowlist (`src/plan-gate.ts`) is currently the **only** barrier.
+
+The workaround therefore remains in place: the client-side gate at the mandatory
+`fs/write_text_file` / `terminal/create` choke points, plus a hidden **primer** message carrying
+the `[Plan approved]`/`[Plan rejected]`/`[Plan cancelled]` protocol (the primer's original premise
+— "ignore the bogus tool result" — is now obsolete; its remaining job is turn shape). The primer
+still causes secondary problems (see 2.6).
+
+**Ask:** apply the plan-mode restriction to `terminal/create` as well as the edit tools — a shell
+command is a write. Optionally, add an explicit rejection outcome so a reject isn't reported to
+the model as a tool failure.
 
 ### 2.2 Slash commands: dispatch requires position 0, and TUI-only commands are advertised
 - A slash command dispatches **only** when it starts the prompt's text block. Editor-injected
@@ -187,7 +226,7 @@ restore replay free of internal protocol messages and include resolved interacti
 ### 2.9 Terminal commands: the shell is the client's, but the agent writes for another one
 In ACP mode grok never runs shell commands itself — it hands each to the client over
 `terminal/create`, so the host shell is the **client's** choice. Two problems follow on Windows
-(added v1.5.13; issue #46):
+(observed 2026-07-13; issue #46, extension v1.5.13; `research/powershell-terminal.md`):
 
 - **The agent writes bash-flavored commands even against a PowerShell host.** We run the agent's
   commands under PowerShell on Windows to match the standalone CLI — users expect their PowerShell
@@ -214,6 +253,86 @@ In ACP mode grok never runs shell commands itself — it hands each to the clien
   **Ask:** converge the execution model (or document it), and surface command output the same way on
   both agents — ideally on the completed update's structured `rawOutput` for both, keyed by
   `toolCallId`.
+
+### 2.10 Edit diffs: the first diff can be wrong, and the `_meta` shape differs by delivery path
+(observed 2026-07-15, grok **0.2.101**, native Windows; `research/edit-diff.md`,
+`research/edit-diff-timing-probe.cjs`)
+
+An edit's diff rides the `tool_call_update` as a `{type:"diff", path, oldText, newText}` content
+block, independent of permission mode — an excellent design that lets a client build a review
+surface with no permission coupling (see §4). Two fidelity problems sit on top of it:
+
+- **Every edit reports its diff twice, and the two can disagree.** An optimistic **pre-write echo**
+  (`kind:"edit"`, titled, no `status`) fires *before* `fs/write_text_file`, then the
+  **authoritative completed update** (`status:"completed"`, no `title`/`kind`) fires *after* it.
+  For a `search_replace` both carry byte-identical `oldText`/`newText`. For a whole-file **Write
+  that overwrites an existing file** they differ: the echo sends `oldText: ""` (it hasn't read the
+  old content yet) while the completed update sends the **real prior content**. The echo lands
+  first, so a client that renders the first diff it sees shows an overwrite as **pure adds** and
+  never corrects it. We shipped exactly that bug for three releases before this probe found it;
+  the fix is to key idempotency on the diff *content* rather than on "already rendered".
+- **A replace-all's diff block is token-sized — but that is not a defect; the full data is on the
+  wire.** *(Open question from the first draft of this section, now SETTLED and WITHDRAWN as an
+  ask — verified 2026-07-15, grok 0.2.101, `research/edit-diff-lines-probe.cjs`.)* A
+  `search_replace` that changed **148 occurrences** emitted a `diff` block describing only the
+  single replaced token, so a client rendering the block alone shows `+1 −1`. We suspected a CLI
+  defect. It isn't: a `replace_all` over **12** `PLACEHOLDER` occurrences at known, non-consecutive
+  lines produced `_meta.details.length === 12`, `old_line` `[3,5,7,9,11,13,15,17,19,21,23,25]` —
+  an exact ground-truth match. The block-level `oldText`/`newText` is the *pattern*; `details[]` is
+  the per-site truth. **This was our client-side gap, not your bug — no ask.**
+
+- **`details[]` has `line_prefix` but no `line_suffix`, so a client can't reconstruct the changed
+  line.** An entry carries exactly `{old_string, old_line, new_string, new_line, context_before,
+  context_after, line_prefix}`. For a site whose real line is `item 1: the token is PLACEHOLDER here`,
+  `line_prefix` gives `item 1: the token is ` — everything *before* the match — but the trailing
+  ` here` is nowhere on the wire. `context_before`/`context_after` are post-edit windows over the
+  *neighbouring* lines, so they never contain the site's own line (a neighbour's window sometimes
+  does, but never for the last site). The result: a client can render the change and its leading
+  context faithfully, but the rendered line is silently truncated at the match.
+  **Ask:** add `line_suffix` (or send the site's full old/new line) — it's one field, and it's the
+  difference between rendering a real line and a truncated one.
+
+Related: the initial `tool_call` carries the edit args (`rawInput: {file_path, old_string,
+new_string}`) but no diff, and lands only ~30ms before the echo — so there is no useful
+"paint earlier from rawInput" shortcut, and taking it would reconstruct the same wrong
+`oldText:""` for a Write.
+
+**Credit where due — the line numbers *are* on the wire** (we missed this until 2026-07-15 and
+rendered region-relative numbers starting at 1 as a result; our bug, not yours). The pre-write echo
+carries them on the diff block:
+```json
+{"type":"diff","path":"…/alpha.txt","oldText":"WIDGET1","newText":"GADGET1",
+ "_meta":{"old_line":2,"new_line":2}}
+```
+and the completed update carries them per-site on `_meta.details[]`, with surrounding context:
+```json
+{"old_string":"WIDGET2","old_line":2,"new_string":"GADGET2","new_line":2,
+ "context_before":"line one of bravo.txt\n","context_after":"last line stays\n",
+ "line_prefix":"the magic word is "}
+```
+`old_line`/`new_line` are real 1-based file lines, and for a multi-line region they're the region's
+**first** line (verified: a 3-line block at lines 40–42 of a 60-line file reports `old_line: 40`).
+This is everything a client needs to render a real gutter. Three notes:
+
+- **The three delivery shapes carry different `_meta`, which is the actual friction.** The echo has
+  block-level `old_line`/`new_line` but **no** `details[]`; the completed update and the
+  **session/load replay** have `details[]` but **no** block-level `old_line`/`new_line`. So a
+  client that reads the block `_meta` gets a number on the echo and loses it on both the completed
+  repaint and every restored session. **Ask:** put the *same* `_meta` on all three — ideally
+  block-level `old_line`/`new_line` **and** `details[]` everywhere — or document which shape owns
+  what.
+- **A whole-file Write's echo carries `_meta: {}`** — no line data at all — while its completed
+  update carries `details[]` with `old_line:1`/`new_line:1`. Same inconsistency, sharper edge.
+- **`old_line` is a post-edit coordinate, not a pre-edit one.** `details[]` is computed against the
+  *final* file: in a replace-all whose replacement grows the line count (3 sites at pre-edit lines
+  2/4/6, each token → 3 lines), every entry reported `old_line === new_line === [2,6,10]` — the
+  post-edit lines, not the originals. `context_before`/`context_after` confirm it (site 1's
+  `context_after` already shows site 2 replaced). It's self-consistent and fine for rendering, but
+  the name `old_line` implies the pre-edit file. **Ask:** either make `old_line` the pre-edit line
+  or document that both are post-edit.
+
+**Ask:** send one authoritative diff, or mark the echo as provisional so a client can tell the two
+apart.
 
 ---
 
@@ -298,6 +417,7 @@ ACP** (`finished=0` observed while `updates.jsonl` filled) — §2.4 holds uncha
   correctly named a solid red PNG (§2.5).
 - Plan mode: `exit_plan_mode` still can't be rejected; the client-side write/terminal gate
   contained a rejected plan (0 workspace mutations) and released an approved one (§2.1).
+  — **Superseded 2026-07-15: fixed in 0.2.101, a rejection is now honored. See §2.1.**
 - Live prompts echo back as `user_message_chunk` (§2.6); `session/cancel` (Stop), two concurrent
   sessions on one workspace, session restore, and structured edit-diff restore all behave as
   documented.

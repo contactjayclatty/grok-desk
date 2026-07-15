@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.15 — 2026-07-15
+
+### Added
+
+- **Inline edit diffs now show real file line numbers.** The gutter reads each region's actual position from the wire instead of restarting at 1 for every edit — a one-line change at line 147 now reads `147`, not `1`. The line-number column widens automatically past 999. ([media/chat.js](media/chat.js), [media/chat.css](media/chat.css))
+- **A replace-all now shows every replaced site.** Renaming a token across 148 lines renders 148 hunks at their real line numbers and reports **+148 −148**, instead of one meaningless `+1 −1` — the per-site detail was always on the wire, we just weren't reading it. ([media/chat.js](media/chat.js))
+
+### Changed
+
+- **An edit's `+N −M` appears as each edit lands**, not when the whole tool batch finishes — the counts are on the wire 2–3s before the turn ends. ([media/chat.js](media/chat.js))
+
+### Fixed
+
+- **A whole-file rewrite of an existing file no longer renders as pure additions.** Grok reports each edit's diff twice, and the optimistic first report claims the file was empty; the authoritative correction was being discarded, so an overwrite showed `+7 −0` instead of the real `+4 −3`. ([media/chat.js](media/chat.js))
+- **Expanding a running tool group no longer snaps shut when the batch finishes.** A manual expand (or collapse) now survives; Expand/Collapse All still overrides it. ([media/chat.js](media/chat.js))
+
 ## 1.5.14 — 2026-07-14
 
 ### Fixed
