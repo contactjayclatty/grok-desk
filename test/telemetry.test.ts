@@ -57,12 +57,13 @@ describe("osNameFromPlatform", () => {
   });
 });
 
-describe("shouldSendTelemetry — both gates must allow", () => {
-  it("only sends when the global setting AND our own opt-in are both on", () => {
-    expect(shouldSendTelemetry(true, true)).toBe(true);
-    expect(shouldSendTelemetry(false, true)).toBe(false); // VS Code global off wins
-    expect(shouldSendTelemetry(true, false)).toBe(false); // our opt-out
-    expect(shouldSendTelemetry(false, false)).toBe(false);
+describe("shouldSendTelemetry — all gates must allow", () => {
+  it("only sends when global setting AND our opt-in AND official build are all on", () => {
+    expect(shouldSendTelemetry(true, true, true)).toBe(true);
+    expect(shouldSendTelemetry(false, true, true)).toBe(false); // VS Code global off wins
+    expect(shouldSendTelemetry(true, false, true)).toBe(false); // our opt-out
+    expect(shouldSendTelemetry(true, true, false)).toBe(false); // a fork build never reports
+    expect(shouldSendTelemetry(false, false, false)).toBe(false);
   });
 });
 

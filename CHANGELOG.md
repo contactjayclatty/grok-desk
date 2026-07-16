@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.2 — 2026-07-16
+
+### Fixed
+
+- **A default model that isn't available no longer nags you.** When `grok.defaultModel` points at a model the session's agent can't use (e.g. a Composer model on a grok-build session, or a retired id), Grok already falls back to an available model — the extension now does so silently and heals the setting to that working model, instead of popping a warning telling you to change it. An empty default (the shipped value = CLI default) is left untouched. ([src/sidebar.ts](src/sidebar.ts))
+
+### Changed
+
+- **Usage telemetry now reports only from the official build.** The anonymous `session_start` event is gated on the official extension id, so a fork republished under a different publisher never reports into this project's analytics. (Unchanged otherwise: anonymous, one event per session, no content, double-gated on VS Code's global telemetry setting + `grok.telemetry.enabled`.) ([src/telemetry.ts](src/telemetry.ts), [src/sidebar.ts](src/sidebar.ts))
+
 ## 1.6.1 — 2026-07-16
 
 Groundwork: Grok Build CLI went **open source** ([xai-org/grok-build](https://github.com/xai-org/grok-build)). We source-verified every item in our upstream feedback and probed the shipped **grok 0.2.101** binary to confirm which newly-visible ACP surfaces actually ship (`research/oss-surfaces-probe.cjs`, `research/grok-build-oss-findings.md`).

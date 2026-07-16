@@ -2,7 +2,7 @@
   "name": "grok-vscode-phuryn",
   "displayName": "Grok Build for VS Code (Community)",
   "description": "GUI for Grok Build CLI (incl. Grok 4.5). Voice control, multiple sessions, images and videos, Mermaid diagrams, and LaTeX. Works with SuperGrok, X Premium+, and xAI API key. MIT, open-source. Not affiliated with or endorsed by xAI.",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "publisher": "PawelHuryn",
   "author": {
     "name": "Paweł Huryn",
@@ -180,7 +180,7 @@
         "grok.defaultModel": {
           "type": "string",
           "default": "",
-          "description": "Model ID to use on new sessions. Empty = CLI default."
+          "description": "Model ID to use on new sessions. Empty = CLI default. If a non-empty value isn't available for the session's agent, it's replaced with the model the CLI falls back to (no prompt)."
         },
         "grok.defaultMode": {
           "type": "string",

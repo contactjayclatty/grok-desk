@@ -19,6 +19,7 @@ import {
   osNameFromPlatform,
   postEvent,
   shouldSendTelemetry,
+  OFFICIAL_EXTENSION_ID,
 } from "./telemetry";
 import { randomUUID } from "node:crypto";
 import {
@@ -1851,12 +1852,23 @@ See design doc for the full state machine diagram.`;
       if (defaultModel && client.currentModelId && client.currentModelId !== defaultModel) {
         const hasModel = client.availableModels.some((m) => m.modelId === defaultModel);
         if (!hasModel) {
+          // The configured default isn't available — grok already fell back to an
+          // available model. Heal the (non-empty) setting silently to that model
+          // so it stops being stale, and just log it; no popup nag. An EMPTY
+          // default means "CLI default" and never reaches here (the `defaultModel &&`
+          // guard above), so a fresh install's empty default is left untouched.
           this.output.appendLine(
-            `[startup] Default model '${defaultModel}' is not available in the CLI. Using '${client.currentModelId}' instead.`,
+            `[startup] Default model '${defaultModel}' is not available; switching grok.defaultModel to '${client.currentModelId}'.`,
           );
-          vscode.window.showWarningMessage(
-            `Grok default model '${defaultModel}' is not available. Falling back to '${client.currentModelId}'. Please update your 'grok.defaultModel' setting.`,
-          );
+          const cfg = vscode.workspace.getConfiguration("grok");
+          const scope = cfg.inspect<string>("defaultModel");
+          const target =
+            scope?.workspaceFolderValue !== undefined
+              ? vscode.ConfigurationTarget.WorkspaceFolder
+              : scope?.workspaceValue !== undefined
+                ? vscode.ConfigurationTarget.Workspace
+                : vscode.ConfigurationTarget.Global;
+          void cfg.update("defaultModel", client.currentModelId, target);
         }
       }
 
@@ -2621,6 +2633,7 @@ See design doc for the full state machine diagram.`;
       const enabled = shouldSendTelemetry(
         vscode.env.isTelemetryEnabled,
         vscode.workspace.getConfiguration("grok").get<boolean>("telemetry.enabled", true),
+        this.context.extension.id === OFFICIAL_EXTENSION_ID,
       );
       if (!enabled) return;
       const cfg = vscode.workspace.getConfiguration("grok");
