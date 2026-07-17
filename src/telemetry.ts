@@ -41,6 +41,17 @@ export interface SessionStartProps {
   mode: string;
   model: string;
   effort: string;
+  /** The three webview-only feature flags, so we can see which defaults people
+   *  actually keep. Booleans, no content. Disclosed in docs/privacy.md. */
+  showThinking: boolean;
+  expandToolDetails: boolean;
+  steerByDefault: boolean;
+  /** Host application name (`vscode.env.appName`) — "Visual Studio Code",
+   *  "Cursor", "Antigravity", … The extension runs in several forks whose
+   *  behavior differs (see § Known limits: Cursor's Move-view gap, Antigravity's
+   *  engine floor), so knowing the mix is what makes those trade-offs decidable.
+   *  Omitted when the host doesn't report one. */
+  host?: string;
 }
 
 export interface AptabaseEvent {
@@ -108,6 +119,11 @@ export function buildSessionStartEvent(
       mode: props.mode,
       model: props.model,
       effort: props.effort,
+      showThinking: props.showThinking,
+      expandToolDetails: props.expandToolDetails,
+      steerByDefault: props.steerByDefault,
+      // Omitted, never sent as "" — an absent host is unknown, not blank.
+      ...(props.host ? { host: props.host } : {}),
     },
   };
 }

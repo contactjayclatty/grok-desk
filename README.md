@@ -140,6 +140,35 @@ To keep a pile of background sessions from each pinning a live process, a sessio
 </details>
 
 <details>
+<summary><strong>Queue or steer</strong> — type while Grok works, without ever interrupting it</summary>
+
+A message you send mid-turn **never cancels** anything. By default it **queues**: it waits as a pending block at the end of the chat (Edit it, Remove it), and sends as one prompt the moment the turn ends. Type more while it waits and it merges into the same message.
+
+When you'd rather redirect Grok *now*, hit **Steer** on the pending message — it goes straight into the running turn, so Grok changes course mid-answer. *"Actually, make it async"* lands without losing the tool work already in flight. Steering is not a Stop: the turn keeps its progress and finishes normally.
+
+Prefer that as the default? Turn on **Steer by default** (gear → *Config & debug*) and sending while Grok works skips the queue entirely. Steered text is plain text only — no attached files, editor context, or `/commands` — and on an older CLI that can't steer, messages fall back to the queue rather than going missing.
+
+</details>
+
+<details>
+<summary><strong>Fork conversation</strong> — branch a thread without touching the original</summary>
+
+Gear → *Fork conversation* copies the conversation into a **new session** and opens it, named `(Fork) <the original's name>`. Try a tangent, chase a side-question, or take a different approach without cluttering the thread you care about — the original is left **byte-for-byte unchanged** and stays in your history.
+
+It branches the **conversation, not your code**: files on disk are untouched, so a fork picks up from where things stand now. (Grok's `/rewind` is the separate feature that restores files.) Forking a fork works and won't stack the tag.
+
+</details>
+
+<details>
+<summary><strong>Context & cost</strong> — what's in the window, and what the turns actually bill</summary>
+
+Click the **context donut** for the exact `used / window (%)`, plus a **Session total** of the tokens this conversation has billed — input, cache read, output — tracked across every turn. Expand **Last turn** for the same split on the most recent prompt, including **model calls**: the row that explains why a turn bills far more than the context it holds (each model call re-sends the conversation, and most of it comes back as a cache read).
+
+**Compact conversation** lives here too — right next to the number that tells you when you need it.
+
+</details>
+
+<details>
 <summary><strong>Session history</strong> — resume, rename, delete, or clear past sessions</summary>
 
 The clock icon lists this project's sessions, newest first. Click a row to resume — Grok replays the conversation, with inline images, plans, and reasoning intact — or hover to rename or delete it. The list loads the **most recent 100** and pulls in older ones as you **scroll**; the **search box** filters by name across your whole history, so it stays fast even with thousands of sessions. **Clear all history** (bottom of the dropdown) removes every session for this project except the current one, after a confirm. Renames are stored by the extension and never touch Grok's own files.
@@ -202,19 +231,6 @@ The **context donut** tracks usage after every turn — click it for the exact c
 
 </details>
 
-<details>
-<summary><strong>MCP servers</strong> — whatever the CLI loads</summary>
-
-MCP servers are configured in the CLI (`~/.grok/config.toml` global, `.grok/config.toml` project) — the extension picks up whatever the CLI loads:
-
-```bash
-grok mcp add playwright --command npx --args @playwright/mcp@latest
-```
-
-Or edit the config via gear → *Open global / project config*, then click **+** to reload.
-
-</details>
-
 ---
 
 ## Configuration
@@ -232,6 +248,7 @@ Or edit the config via gear → *Open global / project config*, then click **+**
 | `grok.useCtrlEnterToSend` | `false` | When true, Enter inserts a newline and Ctrl/Cmd+Enter sends. |
 | `grok.showThinking` | `false` | Show Grok's reasoning (thinking) traces in chat. Off shows a *Thinking…* stand-in. Also toggleable live from gear → Config & debug. |
 | `grok.expandCommandOutputs` | `false` | Expand tool details by default — each shell command's IN/OUT block and each edit's inline diff (useful for auditing Auto-accept sessions). Tool groups still collapse by default. Toggle live from gear → Config & debug → **Expand tool details**. (Setting key kept for compatibility.) |
+| `grok.steerByDefault` | `false` | Send straight into Grok's running turn instead of queueing. Off: a message sent mid-turn waits and flushes when the turn ends (steer it on demand with the **Steer** button). On: it skips the queue and redirects Grok immediately. Never cancels the turn or discards work in progress; plain text only (no chips, editor context, or `/commands`). Toggle live from gear → Config & debug → **Steer by default**. |
 | `grok.telemetry.enabled` | `true` | Send anonymous, privacy-first usage telemetry (see [Privacy](#privacy)). Also honors VS Code's global `telemetry.telemetryLevel`. |
 | `grok.chatFontScale` | `100` | Zoom for the chat panel only, as a percent (`150`, `200`, …). Scales the whole chat UI without rescaling the rest of VS Code (unlike `Ctrl/Cmd+Shift+=`). Applies live; supports User (global) and Workspace (local) scope. |
 | `grok.voiceApiKey` | `""` | Optional override key for voice Speech-to-Text. Empty = reuse your `grok login` token automatically, else `GROK_VOICE_API_KEY` / `XAI_API_KEY` from the workspace `.env`. See [docs/voice-setup.md](docs/voice-setup.md). |

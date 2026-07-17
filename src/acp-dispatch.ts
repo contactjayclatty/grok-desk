@@ -243,6 +243,29 @@ export function routeSessionUpdate(u: any): UpdateRoute | null {
   }
 }
 
+/**
+ * A prompt's BILLING account — `_meta.usage`, aggregated over the whole prompt
+ * (every model call in the turn), not the last call. Distinct from the flat
+ * siblings on `PromptResultMeta`, which are the LAST model call only: one probed
+ * turn reported flat `outputTokens: 42` against `usage.outputTokens: 158` across
+ * `modelCalls: 2`. Also distinct from `totalTokens` (CONTEXT size) — same turn,
+ * 16371 context vs 32488 billed. The two never decompose into each other, so the
+ * donut arc stays context-only and this drives the popover's usage rows (#53).
+ *
+ * There is **no cache-CREATION field** anywhere in the CLI — only `cachedRead`.
+ * Wire capture: research/grok-build-oss-findings.md § 3b.
+ */
+export interface PromptUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedReadTokens?: number;
+  reasoningTokens?: number;
+  modelCalls?: number;
+  apiDurationMs?: number;
+  numTurns?: number;
+}
+
 export interface PromptResultMeta {
   totalTokens?: number;
   inputTokens?: number;
@@ -250,6 +273,27 @@ export interface PromptResultMeta {
   cachedReadTokens?: number;
   reasoningTokens?: number;
   modelId?: string;
+  usage?: PromptUsage;
+}
+
+/** Pull the nested `_meta.usage` (see `PromptUsage`). Returns undefined when the
+ *  CLI didn't send one — an older build, or a turn that ran no inference — so a
+ *  caller can tell "no data" from "zero", and never invents fields. */
+export function extractPromptUsage(meta: any): PromptUsage | undefined {
+  const u = meta?.usage;
+  if (!u || typeof u !== "object") return undefined;
+  const num = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const out: PromptUsage = {
+    inputTokens: num(u.inputTokens),
+    outputTokens: num(u.outputTokens),
+    totalTokens: num(u.totalTokens),
+    cachedReadTokens: num(u.cachedReadTokens),
+    reasoningTokens: num(u.reasoningTokens),
+    modelCalls: num(u.modelCalls),
+    apiDurationMs: num(u.apiDurationMs),
+    numTurns: num(u.numTurns),
+  };
+  return Object.values(out).some((v) => v !== undefined) ? out : undefined;
 }
 
 export function extractPromptMeta(result: any): PromptResultMeta {
@@ -261,7 +305,65 @@ export function extractPromptMeta(result: any): PromptResultMeta {
     cachedReadTokens: m.cachedReadTokens,
     reasoningTokens: m.reasoningTokens,
     modelId: m.modelId,
+    usage: extractPromptUsage(m),
   };
+}
+
+/**
+ * Sum two prompt usages into the session-cumulative total (#53). grok reports
+ * usage per prompt and never a session total, so this number is OURS — the CLI's
+ * `signals.json` carries only context size, which is why a cold restore has no
+ * breakdown to seed from and we persist our own running total instead.
+ *
+ * `undefined + undefined` stays undefined (never invents a 0 for a field the CLI
+ * doesn't report), but a present field added to an absent one keeps the present
+ * value. `apiDurationMs` and `numTurns` sum too — both are per-prompt totals.
+ */
+export function addUsage(a: PromptUsage | undefined, b: PromptUsage | undefined): PromptUsage | undefined {
+  if (!a) return b ? { ...b } : undefined;
+  if (!b) return { ...a };
+  const keys: (keyof PromptUsage)[] = [
+    "inputTokens", "outputTokens", "totalTokens", "cachedReadTokens",
+    "reasoningTokens", "modelCalls", "apiDurationMs", "numTurns",
+  ];
+  const out: PromptUsage = {};
+  for (const k of keys) {
+    const x = a[k];
+    const y = b[k];
+    if (x === undefined && y === undefined) continue;
+    out[k] = (x ?? 0) + (y ?? 0);
+  }
+  return out;
+}
+
+/**
+ * Whether a turn's usage is a real measurement worth counting (#53).
+ *
+ * A `/compact` (or `/session-info`) turn runs no inference of its own, and grok
+ * captures `_meta` BEFORE the slash-command match — so it replays the PREVIOUS
+ * turn's input/output/cache numbers verbatim. `gateZeroTokenMeta` already strips
+ * the bogus `totalTokens: 0` those turns carry, and that same 0 is the tell here:
+ * counting the stale siblings would double-bill the prior turn into the session
+ * total on every compact.
+ */
+export function usageIsRealMeasurement(meta: PromptResultMeta): boolean {
+  return meta.totalTokens !== 0 && !!meta.usage;
+}
+
+/**
+ * A JSON-RPC `-32601 method not found` — the CLI doesn't dispatch this method at
+ * all. The `_x.ai/*` RPCs we use for Steer (#52) and Fork (#48) ship unadvertised,
+ * so an older build answers -32601 and the feature must hide itself rather than
+ * error at the user. `acp.ts` rejects with the RAW JSON-RPC error object (not an
+ * Error), so the code survives; the message check is a belt-and-braces fallback.
+ *
+ * Note -32602 (`invalid params`) deliberately does NOT count: that means the
+ * method EXISTS and we sent the wrong shape — a bug to fix, not a capability gap.
+ */
+export function isMethodNotFoundError(e: any): boolean {
+  if (!e) return false;
+  if (e.code === -32601) return true;
+  return /method not found|method_not_found/i.test(String(e.message ?? e));
 }
 
 /**

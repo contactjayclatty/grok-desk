@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  addUsage,
   collectToolImages,
   contextUsedFromCompactNotification,
   autoCompactStartedNote,
@@ -7,10 +8,13 @@ import {
   extractGeneratedMediaPaths,
   extractImageContent,
   extractPromptMeta,
+  extractPromptUsage,
   gateZeroTokenMeta,
   isMediaGenToolCall,
   isIncompatibleAgentError,
+  isMethodNotFoundError,
   isAuthErrorText,
+  usageIsRealMeasurement,
   makeAckResponse,
   makeExitPlanResponse,
   makePermissionResponse,
@@ -755,5 +759,100 @@ describe("media generation (grok's real /imagine + /imagine-video wire shapes)",
       expect(extractGeneratedMediaPaths(completedWithText("Image generation failed: quota exceeded."))).toEqual([]);
       expect(extractGeneratedMediaPaths(completedWithText(String.raw`Saved a log to \\?\C:\out\run.txt.`))).toEqual([]);
     });
+  });
+});
+
+// #53 — the billing split. grok nests a whole-prompt `usage` inside `_meta`
+// alongside flat siblings that describe only the LAST model call; we dropped it
+// on the floor before. Shapes below are verbatim 0.2.101 captures
+// (research/oss-surfaces-probe.cjs --scenario=usage).
+describe("extractPromptUsage (#53)", () => {
+  it("pulls the nested usage off a real _meta", () => {
+    const meta = {
+      totalTokens: 16371, modelId: "grok-4.5", inputTokens: 16328, outputTokens: 42,
+      usage: {
+        inputTokens: 32330, outputTokens: 158, totalTokens: 32488, cachedReadTokens: 27264,
+        reasoningTokens: 128, modelCalls: 2, apiDurationMs: 3770, numTurns: 2,
+        modelUsage: { "grok-4.5": { inputTokens: 32330 } },
+      },
+    };
+    expect(extractPromptUsage(meta)).toEqual({
+      inputTokens: 32330, outputTokens: 158, totalTokens: 32488, cachedReadTokens: 27264,
+      reasoningTokens: 128, modelCalls: 2, apiDurationMs: 3770, numTurns: 2,
+    });
+  });
+
+  it("is undefined when the CLI sent no usage — 'no data' must not read as zero", () => {
+    expect(extractPromptUsage({ totalTokens: 100 })).toBeUndefined();
+    expect(extractPromptUsage({})).toBeUndefined();
+    expect(extractPromptUsage(undefined)).toBeUndefined();
+    expect(extractPromptUsage({ usage: "nonsense" })).toBeUndefined();
+    expect(extractPromptUsage({ usage: {} })).toBeUndefined();
+  });
+
+  it("extractPromptMeta carries usage through", () => {
+    const m = extractPromptMeta({ _meta: { totalTokens: 5, usage: { inputTokens: 9 } } });
+    expect(m.usage).toEqual({ inputTokens: 9 });
+  });
+});
+
+describe("addUsage (#53)", () => {
+  it("sums the session total field-wise", () => {
+    expect(addUsage({ inputTokens: 10, outputTokens: 2 }, { inputTokens: 5, outputTokens: 3 }))
+      .toEqual({ inputTokens: 15, outputTokens: 5 });
+  });
+
+  it("never invents a field neither side reported", () => {
+    const sum = addUsage({ inputTokens: 10 }, { inputTokens: 5 })!;
+    expect(sum.inputTokens).toBe(15);
+    expect("cachedReadTokens" in sum).toBe(false); // not 0 — absent
+  });
+
+  it("keeps a field only one side reported", () => {
+    expect(addUsage({ inputTokens: 10 }, { outputTokens: 4 })).toEqual({ inputTokens: 10, outputTokens: 4 });
+  });
+
+  it("handles the empty accumulator and copies (no aliasing)", () => {
+    const b = { inputTokens: 7 };
+    const out = addUsage(undefined, b)!;
+    expect(out).toEqual({ inputTokens: 7 });
+    out.inputTokens = 99;
+    expect(b.inputTokens).toBe(7);
+    expect(addUsage(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("usageIsRealMeasurement (#53)", () => {
+  it("rejects a /compact turn — its siblings are the PREVIOUS turn replayed", () => {
+    // grok captures _meta before the slash-command match, so a compact turn
+    // reports totalTokens:0 with stale input/output. Counting it would
+    // double-bill the prior turn into the session total on every compact.
+    expect(usageIsRealMeasurement({ totalTokens: 0, usage: { inputTokens: 16394 } })).toBe(false);
+  });
+  it("rejects a turn with no usage at all", () => {
+    expect(usageIsRealMeasurement({ totalTokens: 500 })).toBe(false);
+  });
+  it("accepts a real inference turn", () => {
+    expect(usageIsRealMeasurement({ totalTokens: 16371, usage: { inputTokens: 9 } })).toBe(true);
+  });
+});
+
+// #52/#48 — both features ride UNADVERTISED `_x.ai/*` RPCs, so an older CLI
+// answers -32601 and the feature must hide itself rather than error at the user.
+describe("isMethodNotFoundError (#52, #48)", () => {
+  it("detects the JSON-RPC code (acp.ts rejects with the RAW error object)", () => {
+    expect(isMethodNotFoundError({ code: -32601, message: "Method not found" })).toBe(true);
+  });
+  it("falls back to the message when a wrapper ate the code", () => {
+    expect(isMethodNotFoundError(new Error("Method not found"))).toBe(true);
+  });
+  it("does NOT treat -32602 as a capability gap — that's our bug, not theirs", () => {
+    // Exactly what `{sessionId}`-only fork returns: the method EXISTS and we sent
+    // the wrong shape. Hiding the feature there would mask a real bug.
+    expect(isMethodNotFoundError({ code: -32602, message: "Invalid params" })).toBe(false);
+  });
+  it("is false for unrelated failures", () => {
+    expect(isMethodNotFoundError({ code: -32000, message: "boom" })).toBe(false);
+    expect(isMethodNotFoundError(undefined)).toBe(false);
   });
 });

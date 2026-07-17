@@ -27,6 +27,7 @@ was made against; a section without a date here predates this log and is covered
 
 | Date | grok CLI | What changed |
 |---|---|---|
+| **2026-07-17** | **0.2.101** | **§2.12 (new) — `session/fork`'s `targetPromptIndex` truncates `chat_history.jsonl` but NOT `updates.jsonl`**, so a fork-at-a-point replays a conversation the model has forgotten; we ship whole-session forking only as a result. Also **two unadvertised RPCs probe-confirmed WORKING and now shipped in the extension**: `x.ai/interject` (mid-turn steering — the model obeys mid-stream and the turn still ends `end_turn`, i.e. it is genuinely not a cancel) backs the new Steer button, and `x.ai/session/fork` backs Fork. Both are `_`-prefixed, unadvertised, and therefore feature-gated client-side on -32601. Separately, `_meta.usage` (per-prompt billing, incl. `modelUsage`) exists and we had been dropping it; **no cache-creation field exists anywhere**. |
 | **2026-07-16** | **OSS tree** | **Source-verified pass over every section** (the CLI went open source). §2.11's root cause found — grok silently merges `~/.claude/settings.json` permission rules; confirmed on our dev box. §2.4 corrected: the lifecycle events DO transmit live, on `x.ai/session_notification` (we watched the persist rail). §2.1's rejection-outcome ask withdrawn — a success `{outcome:"cancelled"}` response already exists (our client gap). §2.6: session list/search/rename/delete/fork exist as unadvertised `x.ai/*` methods. §2.7 corrected: reasoning effort IS session-settable via `set_model` `_meta`. §2.9: an undocumented `GROK_SHELL` override realigns the model's shell hints. Citations + sketch fixes added throughout. |
 | **2026-07-15** | **0.2.101** | **§2.1 — the headline defect is FIXED.** A rejection of `x.ai/exit_plan_mode` is now honored. **One new, still-open hole:** plan mode gates the *edit* tool but **not** `terminal/create`, so a shell command can mutate the workspace during planning. |
 | **2026-07-15** | **0.2.101** | **§2.10 (new) — edit diffs.** Three asks: every edit reports its diff **twice** and the first can be wrong (an overwriting Write's echo claims `oldText:""`); the echo, the completed update, and the session/load replay each carry a **different `_meta` shape**; and `details[]` has `line_prefix` but no `line_suffix`, so the changed line can't be reconstructed. *(Raised and **withdrawn** the same day: "a replace-all under-describes the change" — `_meta.details[]` does enumerate every site, 12/12 with exact line numbers. That was our client gap, not a CLI defect.)* |
@@ -608,6 +609,39 @@ over ACP (§2.7), and surface the `.claude` import visibly (the TUI's explicit C
 right consent model; the silent always-on fallback is not). A client can re-read the same files to
 display an honest state — ours will — but a sidebar should not need to re-implement the CLI's
 config resolution to explain the CLI's behavior.
+
+---
+
+### 2.12 `session/fork`'s `targetPromptIndex` truncates the model's history but not the replay
+
+**Build:** 0.2.101. **Method:** `_x.ai/session/fork` (unadvertised).
+
+Forking at a point is exactly the primitive a "branch from this message" UI needs, and the field is
+there: `ForkSessionRequest.target_prompt_index` (`session/fork.rs:30`) reaches
+`CopySessionOptions` (`:99`). It **works** — forking a 14-message session at index 1 returns
+`chatMessagesCopied: 7`. But it only truncates one of the two logs:
+
+| | full fork | `targetPromptIndex: 1` |
+|---|---|---|
+| `chatMessagesCopied` | 14 | **7** |
+| `updatesCopied` | 20 | **20** |
+
+A disk diff confirms the split: in the truncated fork the 2nd prompt is **absent from
+`chat_history.jsonl`** (what the model reads) but **still present in `updates.jsonl`** — which the
+user guide calls "the authoritative conversation log that drives `/resume` and session restore".
+
+**Consequence:** any client that forks at a point and then `session/load`s it renders the FULL
+conversation while the model has silently forgotten everything after the cut. The user sees their
+own messages on screen and the agent denies knowledge of them. There is no client-side signal that
+the two logs disagree.
+
+**Our workaround:** we ship whole-session forking only (gear → *Fork conversation*) and never send
+`targetPromptIndex`, which is a real feature loss — per-message branching is the more useful shape.
+
+**Ask:** truncate `updates.jsonl` at the same boundary (or return the effective cut point so a
+client can trim its own replay). Note the TUI's `/fork` documents `--at <turn>` as "not supported in
+this version" — so this may simply be an unfinished path that the ACP surface exposes early, rather
+than a regression.
 
 ---
 
