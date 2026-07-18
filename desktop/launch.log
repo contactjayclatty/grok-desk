@@ -1,0 +1,9 @@
+
+spawning C:\Users\Admin\.grok\bin\grok.exe agent stdio (cwd=C:\Users\Admin\source\repos\grok-desk\desktop)
+[stderr] [2m2026-07-18T12:19:04.740420Z[0m [31mERROR[0m worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+[2m2026-07-18T12:19:04.740466Z[0m [31mERROR[0m worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+[2m2026-07-18T12:19:04.740477Z[0m [31mERROR[0m worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+[2m2026-07-18T12:19:04.740486Z[0m [31mERROR[0m worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+[2m2026-07-18T12:19:04.740493Z[0m [31mERROR[0m worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+[2m2026-07-18T12:19:04.740500Z[0m [31mERROR[0m worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+

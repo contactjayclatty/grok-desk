@@ -50,11 +50,27 @@ Press F5 in VS Code for the Extension Development Host.
 
 Based on [phuryn/grok-build-vscode](https://github.com/phuryn/grok-build-vscode) by Paweł Huryn, MIT License. See [docs/attribution.md](docs/attribution.md) and [LICENSE](LICENSE).
 
+## Desktop app (Electron MVP)
+
+Standalone window that reuses the same chat UI + ACP core (no VS Code required):
+
+```powershell
+npm install
+npm run compile
+npm run desktop:install
+npm run desktop
+# optional project root:
+npm start --prefix desktop -- --cwd=C:\path\to\project
+```
+
+Details: [desktop/README.md](desktop/README.md).
+
 ## Roadmap (this fork)
 
 1. Keep VS Code extension working under the **Grok Desk** brand  
-2. Extract ACP host + webview into a shared core  
-3. Ship a standalone desktop shell (Electron / Tauri) that runs without VS Code  
+2. ~~Ship a standalone desktop shell (Electron MVP)~~ — see `desktop/`  
+3. Extract shared core; add session history, chips, voice, native diff  
+4. Package as installable Windows / macOS app  
 
 ## License
 

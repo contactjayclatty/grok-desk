@@ -1,0 +1,17 @@
+{
+  "name": "grok-desk-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Grok Desk desktop shell (Electron) over grok agent stdio",
+  "main": "out/main.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "start": "npm run compile && electron .",
+    "dev": "npm run compile && electron ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "^35.7.5",
+    "typescript": "^5.4.0"
+  }
+}

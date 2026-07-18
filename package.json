@@ -311,7 +311,9 @@
     "telemetry:probe": "tsc -p . && node scripts/telemetry-probe.cjs",
     "prepackage": "node -e \"for (const f of require('fs').readdirSync('.')) if (f.endsWith('.vsix')) require('fs').unlinkSync(f)\"",
     "package": "npx @vscode/vsce package",
-    "publish": "npx @vscode/vsce publish"
+    "publish": "npx @vscode/vsce publish",
+    "desktop:install": "npm install --prefix desktop",
+    "desktop": "npm run compile && npm run compile --prefix desktop && npm start --prefix desktop"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

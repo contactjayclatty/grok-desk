@@ -1,0 +1,73 @@
+/* Standalone theme: map VS Code CSS variables used by media/chat.css */
+:root {
+  color-scheme: dark;
+  --vscode-font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --vscode-font-size: 13px;
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-errorForeground: #f48771;
+  --vscode-sideBar-background: #1e1e1e;
+  --vscode-editor-background: #1e1e1e;
+  --vscode-editor-foreground: #cccccc;
+  --vscode-editorWidget-background: #252526;
+  --vscode-editorWidget-border: #454545;
+  --vscode-editorWidget-foreground: #cccccc;
+  --vscode-input-background: #3c3c3c;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-input-placeholderForeground: #888;
+  --vscode-button-background: #0e639c;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #1177bb;
+  --vscode-button-secondaryBackground: #3a3d41;
+  --vscode-button-secondaryForeground: #ffffff;
+  --vscode-button-secondaryHoverBackground: #45494e;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-list-activeSelectionBackground: #094771;
+  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-focusBorder: #007fd4;
+  --vscode-textLink-foreground: #3794ff;
+  --vscode-textCodeBlock-background: #2d2d2d;
+  --vscode-badge-background: #4d4d4d;
+  --vscode-badge-foreground: #ffffff;
+  --vscode-charts-green: #4ec9b0;
+  --vscode-charts-yellow: #dcdcaa;
+  --vscode-charts-red: #f14c4c;
+  --vscode-charts-blue: #3794ff;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
+  --vscode-scrollbarSlider-background: rgba(121, 121, 121, 0.4);
+  --vscode-scrollbarSlider-hoverBackground: rgba(100, 100, 100, 0.7);
+  --vscode-scrollbarSlider-activeBackground: rgba(191, 191, 191, 0.4);
+  --vscode-toolbar-hoverBackground: rgba(90, 93, 94, 0.31);
+  --vscode-icon-foreground: #c5c5c5;
+  --vscode-menu-background: #252526;
+  --vscode-menu-foreground: #cccccc;
+  --vscode-menu-border: #454545;
+  --vscode-menu-selectionBackground: #094771;
+  --vscode-menu-selectionForeground: #ffffff;
+  --vscode-checkbox-background: #3c3c3c;
+  --vscode-checkbox-border: #3c3c3c;
+  --vscode-checkbox-foreground: #f0f0f0;
+  --vscode-dropdown-background: #3c3c3c;
+  --vscode-dropdown-foreground: #f0f0f0;
+  --vscode-dropdown-border: #3c3c3c;
+  --vscode-progressBar-background: #0e70c0;
+  --vscode-editor-selectionBackground: #264f78;
+  --vscode-diffEditor-insertedTextBackground: rgba(155, 185, 85, 0.2);
+  --vscode-diffEditor-removedTextBackground: rgba(255, 0, 0, 0.2);
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--vscode-sideBar-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  overflow: hidden;
+}
+
+body.thinking-hidden .thought { display: none; }
+
+/* chat.css hides .welcome until stylesheet loads; keep visible here */
+.welcome { visibility: visible; }
