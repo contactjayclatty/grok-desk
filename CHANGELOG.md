@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 — 2026-07-18
+
+### Added
+
+- **Standalone Electron app** under `desktop/` — full ACP host over `grok agent stdio` with the existing `media/chat` UI.
+- Chat, tools, permissions, plan/agent/auto-accept, questions, queue/steer/fork.
+- Session history (list/search/resume/rename/delete/clear), file chips + paste image, diff open, CLI install/login onboarding.
+- `npm run desktop` launcher with reliable cwd (`GROK_DESK_CWD`) and electron binary ensure script.
+
 ## 0.1.0 — 2026-07-18 (Grok Desk fork)
 
 ### Changed

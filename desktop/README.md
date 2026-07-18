@@ -35,22 +35,24 @@ DevTools:
 $env:GROK_DESK_DEVTOOLS="1"; npm start
 ```
 
-## What works (MVP)
+## What works
 
-- Chat send / stop / new session  
-- Streaming messages, thoughts, tool cards  
-- Shell tools via ACP `terminal/*`  
-- File read/write via ACP `fs/*`  
-- Permission cards + Plan / Agent / Auto-accept modes  
+- Chat send / stop / queue / steer / new session  
+- Streaming messages, thoughts, tool cards, subagents, media  
+- Shell tools via ACP `terminal/*` + file read/write  
+- Permission cards + Plan / Agent / Auto-accept  
 - Ask-user questions  
+- Session history: list, search, resume, rename, delete, clear, fork  
+- File chips: pick, drop path, paste image  
+- Diff: opens in VS Code/Cursor `--diff` when available, else temp files  
+- CLI install / login onboarding (opens system terminal)  
+- Global + project config openers  
 
 ## Not yet
 
-- Session history / resume / fork  
-- Voice, image paste, file chips  
-- Native diff editor  
-- Multi-session pool  
-- CLI install / login onboarding actions  
+- Voice dictation  
+- Multi-session live pool (parallel background agents)  
+- Packaged `.exe` installer (`electron-builder`) 
 
 ## Layout
 

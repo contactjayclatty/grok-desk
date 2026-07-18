@@ -50,7 +50,7 @@ Press F5 in VS Code for the Extension Development Host.
 
 Based on [phuryn/grok-build-vscode](https://github.com/phuryn/grok-build-vscode) by Paweł Huryn, MIT License. See [docs/attribution.md](docs/attribution.md) and [LICENSE](LICENSE).
 
-## Desktop app (Electron MVP)
+## Desktop app
 
 Standalone window that reuses the same chat UI + ACP core (no VS Code required):
 
@@ -59,11 +59,11 @@ npm install
 npm run compile
 npm run desktop:install
 npm run desktop
-# optional project root:
-npm start --prefix desktop -- --cwd=C:\path\to\project
+# open a specific project:
+$env:GROK_DESK_CWD="C:\path\to\project"; npm run desktop
 ```
 
-Details: [desktop/README.md](desktop/README.md).
+Requires the Grok Build CLI (`grok`) installed and signed in. Details: [desktop/README.md](desktop/README.md).
 
 ## Roadmap (this fork)
 

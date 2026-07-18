@@ -2,7 +2,7 @@
   "name": "grok-desk",
   "displayName": "Grok Desk",
   "description": "Grok Desk — GUI for the Grok Build CLI (incl. Grok 4.5). Voice, multi-session, images/video, Mermaid, LaTeX. SuperGrok, X Premium+, or xAI API key. Fork aimed at a standalone desktop app. MIT. Not affiliated with or endorsed by xAI.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "contactjayclatty",
   "author": {
     "name": "contactjayclatty",
@@ -313,7 +313,8 @@
     "package": "npx @vscode/vsce package",
     "publish": "npx @vscode/vsce publish",
     "desktop:install": "npm install --prefix desktop",
-    "desktop": "npm run compile && npm run compile --prefix desktop && npm start --prefix desktop"
+    "desktop": "npm run compile && npm run compile --prefix desktop && npm start --prefix desktop",
+    "desktop:cwd": "npm run compile && npm run compile --prefix desktop && npm start --prefix desktop --"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

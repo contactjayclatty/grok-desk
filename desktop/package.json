@@ -1,13 +1,15 @@
 {
   "name": "grok-desk-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Standalone Grok Desk desktop shell (Electron) over grok agent stdio",
   "main": "out/main.js",
   "scripts": {
+    "postinstall": "node scripts/ensure-electron.js",
+    "ensure-electron": "node scripts/ensure-electron.js",
     "compile": "tsc -p .",
-    "start": "npm run compile && electron .",
-    "dev": "npm run compile && electron ."
+    "start": "npm run ensure-electron && npm run compile && node scripts/run.js",
+    "dev": "npm run ensure-electron && npm run compile && node scripts/run.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
