@@ -8,7 +8,7 @@ import * as vscode from "vscode";
 // exercise: activation, command registration, getHtml/CSP, localResourceRoots, and the
 // first host->webview posts. See CLAUDE.md "What's next" #1.
 
-const EXT_ID = "PawelHuryn.grok-vscode-phuryn";
+const EXT_ID = "contactjayclatty.grok-desk";
 
 suite("grok-build extension smoke", () => {
   test("is present and activates without throwing", async () => {

@@ -1,6 +1,6 @@
 # Advanced install
 
-The quickest path is in the [README](../README.md#install): install the extension from the Extensions view, then let the sidebar's onboarding install the `grok` CLI and sign you in. This file covers the manual, build-from-source, and multi-IDE paths.
+The quickest path is in the [README](../README.md#install-dev): build from source and install the `.vsix`. This file covers CLI setup and multi-IDE paths.
 
 ## Install the CLI yourself (optional)
 
@@ -22,17 +22,17 @@ grok login
 
 `grok login` opens a browser and completes OAuth in one step. Prefer an API key? Get one at [console.x.ai](https://console.x.ai) and set `XAI_API_KEY` in your shell or a workspace `.env` (the extension auto-loads it).
 
-## Install the extension from the command line
+## Install Grok Desk from a built .vsix
 
 ```bash
-code --install-extension PawelHuryn.grok-vscode-phuryn
+code --install-extension grok-desk-0.1.0.vsix --force
 ```
 
 ## Build from source
 
 ```bash
-git clone https://github.com/phuryn/grok-build-vscode.git
-cd grok-build-vscode
+git clone https://github.com/contactjayclatty/grok-desk.git
+cd grok-desk
 npm install
 ./scripts/install.sh        # Windows: pwsh scripts\install.ps1
 ```
@@ -45,7 +45,7 @@ Remove it from the Extensions view, or:
 
 ```bash
 ./scripts/uninstall.sh [cli]          # Windows: pwsh scripts\uninstall.ps1 [-Cli name]
-code --uninstall-extension PawelHuryn.grok-vscode-phuryn
+code --uninstall-extension contactjayclatty.grok-desk
 ```
 
 The uninstall scripts take the same optional CLI argument as install.

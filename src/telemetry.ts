@@ -18,13 +18,11 @@ export const APTABASE_APP_KEY_PROD = "A-EU-2294571902";
 export const APTABASE_APP_KEY_DEV = "A-EU-5074036690";
 
 /** The label Aptabase shows as the SDK that sent the event. */
-export const TELEMETRY_SDK = "grok-vscode-phuryn";
+export const TELEMETRY_SDK = "grok-desk";
 
-/** The publisher.name id of the official build. The Aptabase app key is a
- *  write-only client key that necessarily ships in the vsix, so a fork that
- *  rebuilds carries it too — but a fork can only be *published* under its own
- *  publisher, so its `context.extension.id` differs. Gating telemetry on this id
- *  keeps forks' usage out of the official project (they simply never send). */
+/** Upstream official extension id. Aptabase keys ship in the vsix; we keep this
+ *  as the *upstream* publisher.id so this fork never writes into their project.
+ *  Set your own Aptabase keys + id if you want telemetry for Grok Desk. */
 export const OFFICIAL_EXTENSION_ID = "PawelHuryn.grok-vscode-phuryn";
 
 export interface SystemProps {

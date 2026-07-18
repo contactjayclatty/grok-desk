@@ -4213,8 +4213,8 @@ See design doc for the full state machine diagram.`;
   <main id="messages" class="messages">
     <div class="welcome" id="welcome">
       <span class="welcome-mark" role="img" aria-label="Grok" style="--welcome-mark:url('${resourceUri("grok-icon.svg")}')"></span>
-      <h2>Grok Build (Community)</h2>
-      <p class="welcome-byline muted">by Paweł Huryn (<a href="https://www.productcompass.pm/" class="muted-link">The Product Compass</a>)</p>
+      <h2>Grok Desk</h2>
+      <p class="welcome-byline muted">GUI for Grok Build · <a href="https://github.com/contactjayclatty/grok-desk" class="muted-link">contactjayclatty/grok-desk</a></p>
       <p id="welcome-version" class="muted loading-dots">Starting</p>
       <div id="welcome-onboarding"></div>
     </div>

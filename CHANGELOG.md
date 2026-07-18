@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0 — 2026-07-18 (Grok Desk fork)
+
+### Changed
+
+- **Rebranded as Grok Desk** — package `grok-desk`, publisher `contactjayclatty`, repo [contactjayclatty/grok-desk](https://github.com/contactjayclatty/grok-desk). Version reset to `0.1.0` for the fork line.
+- Welcome screen, About fine print, and gear repo link point at this fork.
+- Primer marker is now `[grok-desk primer v…]`; legacy `[grok-build-vscode primer v…]` still recognized on session restore.
+- Telemetry SDK label updated; still gated on upstream extension id so usage is not written to the original Aptabase project.
+- README / INSTALL / LICENSE / attribution updated (MIT dual copyright + credit to phuryn/grok-build-vscode).
+
+Upstream history from v1.x (phuryn/grok-build-vscode) continues below.
+
 ## 1.7.1 — 2026-07-18
 
 ### Changed

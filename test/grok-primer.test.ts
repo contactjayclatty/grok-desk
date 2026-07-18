@@ -29,13 +29,15 @@ describe("isPrimerText (host-side replay detection)", () => {
   });
 
   it("matches any primer version (v1, v2, … v17) for forward/back compat", () => {
-    expect(isPrimerText("[grok-build-vscode primer v1]\n\nold")).toBe(true);
-    expect(isPrimerText("[grok-build-vscode primer v2] whatever")).toBe(true);
-    expect(isPrimerText("[grok-build-vscode primer v17] some future primer")).toBe(true);
+    expect(isPrimerText("[grok-desk primer v1]\n\nold")).toBe(true);
+    expect(isPrimerText("[grok-desk primer v2] whatever")).toBe(true);
+    expect(isPrimerText("[grok-desk primer v17] some future primer")).toBe(true);
+    // legacy upstream marker still recognized on session restore
+    expect(isPrimerText("[grok-build-vscode primer v4] legacy")).toBe(true);
   });
 
   it("tolerates leading whitespace (chunked replay can prepend a newline)", () => {
-    expect(isPrimerText("\n  [grok-build-vscode primer v3] body")).toBe(true);
+    expect(isPrimerText("\n  [grok-desk primer v3] body")).toBe(true);
   });
 
   it("does not match a normal user message", () => {
@@ -58,7 +60,7 @@ describe("isPrimerText (host-side replay detection)", () => {
 
 describe("GROK_PRIMER content (v4 — trimmed to stop pre-turn exploration)", () => {
   it("is marked v4 and starts with the marker", () => {
-    expect(PRIMER_MARKER).toBe("[grok-build-vscode primer v4]");
+    expect(PRIMER_MARKER).toBe("[grok-desk primer v4]");
     expect(GROK_PRIMER.startsWith(PRIMER_MARKER)).toBe(true);
     expect(isPrimerText(GROK_PRIMER)).toBe(true);
   });

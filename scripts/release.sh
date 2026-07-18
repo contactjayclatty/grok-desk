@@ -36,7 +36,7 @@ step() { printf '\033[36m==> %s\033[0m\n' "$1"; }
 
 version="$(node -p "require('./package.json').version")"
 tag="v$version"
-vsix="grok-vscode-phuryn-$version.vsix"
+vsix="grok-desk-$version.vsix"
 [ -n "$MSG" ] || MSG="Release $tag"
 printf '\033[32mReleasing %s\033[0m\n' "$tag"
 

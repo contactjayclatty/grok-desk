@@ -33,14 +33,15 @@ export const PRIMER_VERSION = 4;
 
 /** Marker prefix on every primer message so we can identify it in session
  *  records and skip rendering it on restore. */
-export const PRIMER_MARKER = "[grok-build-vscode primer v4]";
+export const PRIMER_MARKER = "[grok-desk primer v4]";
 
 /** Matches the marker prefix of any primer version (v1, v2, …) at the start of
- *  a message. The host uses it to recognize the primer when grok replays it as
+ *  a message — current `grok-desk` and legacy `grok-build-vscode` markers.
+ *  The host uses it to recognize the primer when grok replays it as
  *  a user message on restore — mirrors the webview's own PRIMER_PATTERN — so the
  *  session is marked already-primed and the bubble isn't counted toward plan
  *  positions. Version-agnostic so an older on-disk primer still counts as primed. */
-export const PRIMER_PATTERN = /^\s*\[grok-build-vscode primer v\d+\]/;
+export const PRIMER_PATTERN = /^\s*\[(?:grok-desk|grok-build-vscode) primer v\d+\]/;
 
 /** True when `text` is (the start of) one of our hidden primer messages. */
 export function isPrimerText(text: string): boolean {

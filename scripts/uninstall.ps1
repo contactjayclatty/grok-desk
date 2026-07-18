@@ -33,7 +33,7 @@ function Find-CodeCli {
 }
 
 $code = Find-CodeCli
-Write-Host "Uninstalling PawelHuryn.grok-vscode-phuryn via $code"
-& $code --uninstall-extension PawelHuryn.grok-vscode-phuryn
+Write-Host "Uninstalling contactjayclatty.grok-desk via $code"
+& $code --uninstall-extension contactjayclatty.grok-desk
 Write-Host ""
 Write-Host "Done. Reload the IDE window to drop the sidebar."

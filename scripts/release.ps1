@@ -12,7 +12,7 @@
     2. tsc --noEmit + npm test       (skip all gating with -NoTest)
        + npm run test:live           (real grok — mandatory gate; skip with -SkipLive)
     3. assert tag vX.Y.Z is free     (bump the version if it isn't)
-    4. npm run package               -> grok-vscode-phuryn-X.Y.Z.vsix
+    4. npm run package               -> grok-desk-X.Y.Z.vsix
     5. commit the working tree        (message from -MessageFile / -Message / default)
     6. push main
     7. annotated tag vX.Y.Z + push
@@ -86,7 +86,7 @@ if (-not $NoTest) {
 if (git tag --list $tag) { throw "Tag $tag already exists - bump package.json/changelog first." }
 
 # 4. build the vsix that will be attached to the release
-$vsix = "grok-vscode-phuryn-$version.vsix"
+$vsix = "grok-desk-$version.vsix"
 Run "npm run package" { npm run package }
 if (-not (Test-Path $vsix)) { throw "Expected $vsix but it wasn't produced." }
 
