@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  configDefaultEffort,
+  configDefaultModel,
   configForcesAlwaysApprove,
+  configForcesYolo,
   isAlwaysApprovePermission,
+  readModelsDefault,
+  readModelsDefaultEffort,
   readUiPermissionMode,
 } from "../src/grok-config";
 
@@ -114,5 +119,34 @@ describe("configForcesAlwaysApprove", () => {
     expect(
       configForcesAlwaysApprove({ project: projectWithoutKey, global: CONFIG("always-approve") }),
     ).toBe(true);
+  });
+});
+
+describe("models + yolo config", () => {
+  const MODELS = `[models]
+default = "grok-4.5"
+default_reasoning_effort = "high"
+`;
+
+  it("reads default model and effort", () => {
+    expect(readModelsDefault(MODELS)).toBe("grok-4.5");
+    expect(readModelsDefaultEffort(MODELS)).toBe("high");
+    expect(configDefaultModel({ global: MODELS })).toBe("grok-4.5");
+    expect(configDefaultEffort({ global: MODELS })).toBe("high");
+  });
+
+  it("prefers project model over global", () => {
+    expect(
+      configDefaultModel({
+        project: `[models]\ndefault = "grok-composer-2.5-fast"\n`,
+        global: MODELS,
+      }),
+    ).toBe("grok-composer-2.5-fast");
+  });
+
+  it("treats always-approve as yolo", () => {
+    expect(configForcesYolo({ global: CONFIG("always-approve") })).toBe(true);
+    expect(configForcesYolo({ global: `[ui]\nyolo = true\n` })).toBe(true);
+    expect(configForcesYolo({ global: CONFIG("ask") })).toBe(false);
   });
 });

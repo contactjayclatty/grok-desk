@@ -42,6 +42,10 @@ export interface AcpClientOptions {
   effort?: EffortLevel;
   env?: NodeJS.ProcessEnv;
   log: (msg: string) => void;
+  /** ACP clientInfo.name — defaults to "grok-desk". */
+  clientName?: string;
+  /** ACP clientInfo.version. */
+  clientVersion?: string;
 }
 
 export interface ModelInfo {
@@ -248,6 +252,13 @@ export class AcpClient extends EventEmitter {
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
         terminal: true,
+      },
+      // Identify as a Grok Build ACP client so the CLI enables full agent
+      // surfaces (skills, slash commands, plugins) the same way as the TUI /
+      // VS Code extension — not a bare anonymous JSON-RPC caller.
+      clientInfo: {
+        name: this.opts.clientName ?? "grok-build-acp",
+        version: this.opts.clientVersion ?? "0.0.0",
       },
     });
     this.emit("initialized", init);

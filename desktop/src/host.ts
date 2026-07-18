@@ -50,7 +50,15 @@ const {
 const { buildPromptWithImages } = require("../../out/prompt-builder") as any;
 const { matchSlashCommand } = require("../../out/slash-filter") as any;
 const { decideRestoreState } = require("../../out/plan-restore") as any;
+const {
+  configDefaultModel,
+  configDefaultEffort,
+  configForcesYolo,
+  readTomlFile,
+} = require("../../out/grok-config") as any;
 /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
+
+const EFFORT_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
 
 export type PostFn = (msg: Record<string, unknown>) => void;
 
@@ -181,6 +189,10 @@ export class DesktopHost {
   private expandCommandOutputs = false;
   private effort = "";
   private defaultModel = "";
+  /** True when user explicitly set effort via UI (don't clobber with config). */
+  private effortUserSet = false;
+  private defaultModelUserSet = false;
+  private configYolo = false;
   private meta: MetaMap = loadMeta();
   private readonly log: (line: string) => void;
   private readonly version: string;
@@ -188,9 +200,43 @@ export class DesktopHost {
 
   constructor(private opts: DesktopHostOptions) {
     this.log = opts.log ?? ((l) => console.log(`[host] ${l}`));
-    this.version = opts.packageVersion ?? "0.1.0";
+    this.version = opts.packageVersion ?? "0.2.0";
     this.cwd = opts.cwd;
     setTerminalShellPreference("auto");
+    this.applyGrokConfigDefaults();
+  }
+
+  /**
+   * Mirror ~/.grok/config.toml + project .grok/config.toml so desktop sessions
+   * match the standalone Grok Build CLI (model, effort, always-approve).
+   */
+  private applyGrokConfigDefaults(): void {
+    const home = resolveGrokHome(process.env);
+    const globalToml = readTomlFile(path.join(home, "config.toml"));
+    const projectToml = readTomlFile(path.join(this.cwd, ".grok", "config.toml"));
+    const pair = { project: projectToml, global: globalToml };
+
+    this.configYolo = !!configForcesYolo(pair);
+    if (this.configYolo) {
+      this.autoApprove = true;
+      this.log("[config] always-approve / yolo from grok config.toml → Auto accept");
+    }
+
+    if (!this.defaultModelUserSet) {
+      const model = configDefaultModel(pair);
+      if (model) {
+        this.defaultModel = model;
+        this.log(`[config] default model = ${model}`);
+      }
+    }
+
+    if (!this.effortUserSet) {
+      const effort = configDefaultEffort(pair);
+      if (effort && EFFORT_LEVELS.has(effort)) {
+        this.effort = effort === "none" ? "" : effort;
+        this.log(`[config] default reasoning effort = ${effort}`);
+      }
+    }
   }
 
   async handle(msg: { type: string; [k: string]: unknown }): Promise<void> {
@@ -237,12 +283,14 @@ export class DesktopHost {
             try {
               await this.client.setModel(msg.modelId);
               this.defaultModel = msg.modelId;
+              this.defaultModelUserSet = true;
             } catch (e) {
               this.post({ type: "error", text: `Model switch failed: ${(e as Error).message}` });
             }
           }
           break;
         case "setEffort":
+          this.effortUserSet = true;
           await this.setEffort(String(msg.level ?? ""));
           break;
         case "setShowThinking":
@@ -477,8 +525,13 @@ export class DesktopHost {
   }
 
   private buildEnv(): NodeJS.ProcessEnv {
+    // Start from the full user environment so grok finds auth.json, plugins, skills.
     const env: NodeJS.ProcessEnv = { ...process.env };
-    // Load workspace .env if present
+    // Electron sometimes leaves HOME unset on Windows — grok keys off HOME/USERPROFILE.
+    if (!env.HOME && env.USERPROFILE) env.HOME = env.USERPROFILE;
+    if (!env.USERPROFILE && env.HOME) env.USERPROFILE = env.HOME;
+
+    // Load workspace .env if present (project secrets / XAI_API_KEY)
     const dotenv = path.join(this.cwd, ".env");
     if (fs.existsSync(dotenv)) {
       try {
@@ -502,6 +555,8 @@ export class DesktopHost {
       const grokShell = grokShellEnvValue(resolvedTerminalShell(), process.platform);
       if (grokShell) env["GROK_SHELL"] = grokShell;
     }
+    // Mark ACP client for any CLI-side branching
+    env["GROK_ACP_CLIENT"] = "grok-desk";
     return env;
   }
 
@@ -534,13 +589,21 @@ export class DesktopHost {
 
     this.post({ type: "setBusy", value: true, locked: true });
 
-    const effort = this.effort && this.effort !== "none" ? this.effort : undefined;
+    // Re-read config each session so CLI TUI changes apply without restarting the app.
+    this.applyGrokConfigDefaults();
+
+    const effort =
+      this.effort && this.effort !== "none" && EFFORT_LEVELS.has(this.effort)
+        ? this.effort
+        : undefined;
     const client = new AcpClient({
       cliPath,
       cwd: this.cwd,
-      effort,
+      effort: effort as any,
       env: this.buildEnv(),
       log: (m: string) => this.log(m),
+      clientName: "grok-desk",
+      clientVersion: this.version,
     });
 
     client.fsRead = async (p: string) => fs.promises.readFile(p, "utf8");
@@ -561,6 +624,8 @@ export class DesktopHost {
       if (resumeId) {
         await this.loadExisting(client, resumeId, gen);
       } else {
+        // Prefer config / user default model so we get full Grok Build (grok-4.5),
+        // not an accidental composer or empty selection.
         await client.newSession(this.defaultModel || undefined);
         if (gen !== this.gen) return;
         this.sessionId = client.sessionId;
@@ -570,11 +635,49 @@ export class DesktopHost {
           models: client.availableModels,
           currentModelId: client.currentModelId,
         });
+        this.log(
+          `[session] id=${this.sessionId} model=${client.currentModelId} effort=${client.currentReasoningEffort || effort || "default"} cwd=${this.cwd}`,
+        );
       }
 
       if (gen !== this.gen) return;
+
+      // Align CLI agent mode; keep our Auto accept if config forces it.
+      try {
+        await client.setMode("agent");
+      } catch {
+        /* older CLIs */
+      }
+      if (this.configYolo || this.autoApprove) {
+        this.autoApprove = true;
+      }
+
+      // Push effort into live session when the model supports it (spawn flag covers cold start).
+      if (
+        effort &&
+        client.currentModelSupportsEffort?.() &&
+        client.currentReasoningEffort !== effort
+      ) {
+        try {
+          await client.setReasoningEffort?.(effort);
+        } catch (e) {
+          this.log(`[effort] live set failed: ${(e as Error).message}`);
+        }
+      }
+
       this.postMode();
+      this.post({
+        type: "initialState",
+        effort: this.effort,
+        cwd: this.cwd,
+        useCtrlEnter: false,
+        extVersion: this.version,
+        showThinking: this.showThinking,
+        expandCommandOutputs: this.expandCommandOutputs,
+        steerByDefault: this.steerByDefault,
+      });
       this.post({ type: "setBusy", value: false });
+      // Hidden primer (plan-mode protocol) — same as VS Code extension; does not show in chat.
       this.priming = this.runPrimer(client, gen);
       void this.priming.then(() => {
         if (gen === this.gen) void this.flushQueue();
@@ -911,7 +1014,10 @@ export class DesktopHost {
       this.autoApprove = false;
       this.planActive = true;
     } else {
-      this.autoApprove = false;
+      // Config-level always-approve cannot be fully disabled per-session on the CLI,
+      // but keep the UI honest if user picks Agent: still allow permission cards
+      // for our client gate when config doesn't force yolo.
+      this.autoApprove = this.configYolo;
       this.planActive = false;
     }
     if (this.client) this.client.planActive = this.planActive;
