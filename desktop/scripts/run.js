@@ -5,6 +5,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const { ensureElectron } = require("./ensure-electron");
 
 const desktopRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
@@ -28,7 +29,6 @@ function resolveElectronBinary() {
   const direct = path.join(dist, exeName);
   if (fs.existsSync(direct)) return direct;
 
-  // Official package: path.txt relative name under dist/
   const pathFile = path.join(electronRoot, "path.txt");
   if (fs.existsSync(pathFile)) {
     const name = fs.readFileSync(pathFile, "utf8").replace(/^\uFEFF/, "").trim();
@@ -36,7 +36,6 @@ function resolveElectronBinary() {
     if (fs.existsSync(candidate)) return candidate;
   }
 
-  // require('electron') may include trailing \r\n on Windows — always trim
   try {
     const fromPkg = String(require("electron") || "").replace(/^\uFEFF/, "").trim();
     if (fromPkg && fs.existsSync(fromPkg)) return fromPkg;
@@ -51,24 +50,22 @@ const forward = process.argv.slice(2);
 const cwd = resolveCwd(forward);
 process.env.GROK_DESK_CWD = cwd;
 
-// Repair path.txt / binary before launch
-try {
-  require("./ensure-electron.js");
-} catch {
-  /* ensure-electron exits process on hard failure */
+const ensured = ensureElectron();
+if (!ensured.ok) {
+  console.error("[run] could not ensure Electron binary:", ensured.error || "unknown");
+  process.exit(1);
 }
 
-let electronBin = resolveElectronBinary();
+let electronBin = resolveElectronBinary() || ensured.path;
 if (!electronBin) {
   console.error(
     "[run] Electron binary not found.\n" +
       "  Try:  cd desktop && npm run ensure-electron\n" +
-      "  Or:   cd desktop && rm -r node_modules/electron && npm install electron",
+      "  Or:   cd desktop && npm install electron --force",
   );
   process.exit(1);
 }
 
-// Final sanitize
 electronBin = electronBin.replace(/[\r\n]+/g, "").trim();
 
 console.log("[run] electron =", electronBin);
