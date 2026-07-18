@@ -10,40 +10,63 @@ const PKG = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "ut
   version?: string;
 };
 
+const PLACEHOLDER_RE = /[\\/]path[\\/]to[\\/]|[\\/]your[\\/]project|example\.com/i;
+
+function isUsableDir(dir: string): boolean {
+  if (!dir || PLACEHOLDER_RE.test(dir)) return false;
+  try {
+    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function parseCwd(): string {
+  const candidates: string[] = [];
+
   // Prefer explicit env (most reliable across Electron argv quirks).
-  if (process.env.GROK_DESK_CWD) return path.resolve(process.env.GROK_DESK_CWD);
+  if (process.env.GROK_DESK_CWD) {
+    candidates.push(path.resolve(process.env.GROK_DESK_CWD));
+  }
 
   // Accept both --cwd=PATH and --grok-desk-cwd=PATH (Chromium sometimes eats --cwd).
   for (const a of process.argv) {
     for (const prefix of ["--grok-desk-cwd=", "--cwd="]) {
       if (a.startsWith(prefix) && a.length > prefix.length) {
-        return path.resolve(a.slice(prefix.length));
+        candidates.push(path.resolve(a.slice(prefix.length)));
       }
     }
   }
   for (const flag of ["--grok-desk-cwd", "--cwd"]) {
     const idx = process.argv.indexOf(flag);
     if (idx >= 0 && process.argv[idx + 1] && !process.argv[idx + 1].startsWith("-")) {
-      return path.resolve(process.argv[idx + 1]);
+      candidates.push(path.resolve(process.argv[idx + 1]));
     }
   }
 
-  // Default: repo root when launched from desktop/, else process.cwd().
-  // Never fall back to drive root alone if the repo is discoverable next to this app.
-  const candidates = [
+  candidates.push(
     process.cwd(),
     path.resolve(__dirname, "..", ".."), // desktop/out -> repo root
     path.resolve(__dirname, ".."), // desktop/
-  ];
+  );
+
   for (const c of candidates) {
-    if (path.basename(c) === "desktop" && fs.existsSync(path.join(c, "..", "package.json"))) {
-      return path.resolve(c, "..");
+    if (path.basename(c) === "desktop") {
+      const parent = path.resolve(c, "..");
+      if (isUsableDir(parent) && fs.existsSync(path.join(parent, "package.json"))) return parent;
     }
-    if (fs.existsSync(path.join(c, "package.json")) && fs.existsSync(path.join(c, "media", "chat.js"))) {
+    if (
+      isUsableDir(c) &&
+      fs.existsSync(path.join(c, "package.json")) &&
+      fs.existsSync(path.join(c, "media", "chat.js"))
+    ) {
       return c;
     }
+    if (isUsableDir(c)) return c;
   }
+
+  const repo = path.resolve(__dirname, "..", "..");
+  if (isUsableDir(repo)) return repo;
   return process.cwd();
 }
 

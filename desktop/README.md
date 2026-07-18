@@ -23,10 +23,19 @@ Or from repo root (after first `desktop/npm install`):
 npm run desktop
 ```
 
-Open a project directory:
+Open a **real** project directory (folder must exist):
 
 ```powershell
-npm start -- --cwd=C:\path\to\project
+$env:GROK_DESK_CWD="C:\Users\Admin\source\repos\my-app"
+npm start
+# or:
+npm start -- --cwd=C:\Users\Admin\source\repos\my-app
+```
+
+If you previously set a docs placeholder (`C:\path\to\project`), clear it:
+
+```powershell
+Remove-Item Env:GROK_DESK_CWD -ErrorAction SilentlyContinue
 ```
 
 DevTools:

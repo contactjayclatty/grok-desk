@@ -59,11 +59,15 @@ npm install
 npm run compile
 npm run desktop:install
 npm run desktop
-# open a specific project:
-$env:GROK_DESK_CWD="C:\path\to\project"; npm run desktop
+# open a real project folder (must exist on disk):
+$env:GROK_DESK_CWD="C:\Users\Admin\source\repos\my-app"; npm run desktop
+# clear a bad value:
+Remove-Item Env:GROK_DESK_CWD -ErrorAction SilentlyContinue
 ```
 
 Requires the Grok Build CLI (`grok`) installed and signed in. Details: [desktop/README.md](desktop/README.md).
+
+> **Note:** On Windows, a missing project folder makes spawn fail with `grok.exe ENOENT`. That usually means `GROK_DESK_CWD` points at a non-existent path (including the docs placeholder), not that the CLI is missing.
 
 ## Roadmap (this fork)
 

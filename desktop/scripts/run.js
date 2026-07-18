@@ -10,16 +10,71 @@ const { ensureElectron } = require("./ensure-electron");
 const desktopRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
 
+/** Obvious docs placeholders people copy-paste as-is. */
+const PLACEHOLDER_RE = /[\\/]path[\\/]to[\\/]|[\\/]your[\\/]project|example\.com/i;
+
+function isUsableDir(dir) {
+  if (!dir) return false;
+  try {
+    if (PLACEHOLDER_RE.test(dir)) return false;
+    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Project folder for the agent. Must exist on disk — on Windows, spawn() of
+ * grok.exe fails with ENOENT when cwd is missing, which looks like a missing CLI.
+ */
 function resolveCwd(argv) {
-  if (process.env.GROK_DESK_CWD) return path.resolve(process.env.GROK_DESK_CWD);
+  const candidates = [];
+
+  if (process.env.GROK_DESK_CWD) {
+    candidates.push({ source: "GROK_DESK_CWD", value: path.resolve(process.env.GROK_DESK_CWD) });
+  }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith("--cwd=")) return path.resolve(a.slice("--cwd=".length));
-    if (a.startsWith("--grok-desk-cwd=")) return path.resolve(a.slice("--grok-desk-cwd=".length));
-    if ((a === "--cwd" || a === "--grok-desk-cwd") && argv[i + 1]) return path.resolve(argv[i + 1]);
+    if (a.startsWith("--cwd=")) {
+      candidates.push({ source: "--cwd=", value: path.resolve(a.slice("--cwd=".length)) });
+    }
+    if (a.startsWith("--grok-desk-cwd=")) {
+      candidates.push({
+        source: "--grok-desk-cwd=",
+        value: path.resolve(a.slice("--grok-desk-cwd=".length)),
+      });
+    }
+    if ((a === "--cwd" || a === "--grok-desk-cwd") && argv[i + 1]) {
+      candidates.push({ source: a, value: path.resolve(argv[i + 1]) });
+    }
   }
-  if (fs.existsSync(path.join(repoRoot, "media", "chat.js"))) return repoRoot;
-  return process.cwd();
+  if (fs.existsSync(path.join(repoRoot, "media", "chat.js"))) {
+    candidates.push({ source: "repo root", value: repoRoot });
+  }
+  candidates.push({ source: "process.cwd()", value: process.cwd() });
+
+  for (const c of candidates) {
+    if (isUsableDir(c.value)) {
+      if (c.source === "GROK_DESK_CWD" || c.source.startsWith("--")) {
+        console.log(`[run] using project cwd from ${c.source}`);
+      }
+      return c.value;
+    }
+    if (c.source === "GROK_DESK_CWD" || c.source.startsWith("--")) {
+      console.warn(
+        `[run] ignoring invalid ${c.source}=${c.value}\n` +
+          `      (folder must exist; docs examples like C:\\path\\to\\project are placeholders)`,
+      );
+    }
+  }
+
+  // Last resort — still must exist
+  const fallback = isUsableDir(repoRoot) ? repoRoot : process.cwd();
+  if (!isUsableDir(fallback)) {
+    console.error("[run] no usable project directory. Set GROK_DESK_CWD to a real folder.");
+    process.exit(1);
+  }
+  return fallback;
 }
 
 function resolveElectronBinary() {

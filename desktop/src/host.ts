@@ -512,6 +512,19 @@ export class DesktopHost {
       return;
     }
 
+    // Windows Node reports spawn ENOENT when cwd is missing — even if grok.exe exists.
+    if (!fs.existsSync(this.cwd) || !fs.statSync(this.cwd).isDirectory()) {
+      const msg =
+        `Project folder does not exist: ${this.cwd}\n` +
+        `Clear a bad GROK_DESK_CWD (docs examples like C:\\path\\to\\project are placeholders) ` +
+        `or set it to a real directory.`;
+      this.log(msg);
+      this.post({ type: "error", text: msg });
+      this.post({ type: "agentError", text: msg });
+      this.post({ type: "setBusy", value: false });
+      return;
+    }
+
     this.gen++;
     const gen = this.gen;
     if (this.client) {
