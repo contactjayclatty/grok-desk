@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.1 — 2026-07-18
+
+### Changed
+
+- **README reworked as a landing page.** Features now sit directly under *Why use this?*, descriptions are trimmed to the point (deep technical detail stays in the dedicated docs), and the duplicate *Cost control* / *Context & cost* sections are merged into one. Fresh screenshots for **Context & cost**, **Fork conversation**, and **Queue or steer**, plus a new **Subagents** feature entry; the *Agent Dashboard* section folded into *Session history*, which now hosts the status-dot legend.
+- **Smaller vsix** (~4 MB less): four unused screenshots removed and the `/imagine` hero image converted to WebP (2.9 MB → 240 KB).
+
 ## 1.7.0 — 2026-07-17
 
 Three requested features, all built on ACP surfaces the Grok Build CLI already ships but never advertises — probe-confirmed against grok 0.2.101 first ([research/grok-build-oss-findings.md](research/grok-build-oss-findings.md) § 3a) and pinned by new real-grok gates.
